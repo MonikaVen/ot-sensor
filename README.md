@@ -13,7 +13,7 @@ Python **3.12** is required for the ONNX extra (`onnxruntime` has no 3.14 wheel)
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e '.[dev,onnx]'
+pip install -e '.[dev,onnx,ui]'
 ```
 
 Check the tools:
@@ -103,6 +103,37 @@ SENSOR_MODE=prod ot-sensor --ticks 10
 ```
 
 Without `watchstander-slm` GGUF weights, SLM status is `llm_unavailable` and the incident still stands.
+
+## Run the dashboard
+
+Operator UI (Vite + TypeScript, no React): asset / communications map, service health, incident cases, NIS2 clocks, and a pop-up when a new incident opens. The API ticks the N2K lab into the sensor (same pipeline as `ot-sensor`).
+
+```bash
+pip install -e '.[dev,onnx,ui]'
+cd frontend && npm install && npm run build && cd ..
+ot-dashboard --mode dev --port 8443
+```
+
+Open http://127.0.0.1:8443
+
+Vite live reload (API must already be on 8443):
+
+```bash
+ot-dashboard --mode dev --port 8443
+cd frontend && npm install && npm run dev
+```
+
+Then open http://127.0.0.1:5173
+
+| Control | Effect |
+| --- | --- |
+| Start / Pause | Lab ticks (GPS spoof overlay by default) |
+| Reset spoof | Restart `gps-spoof-primary` |
+| Reset underway | Benign kinematics, no injector |
+| Communications | Live src→dst (and broadcast to the segment bus). Violations in red |
+| Dependencies | `depends_on` from asset-criticality.yaml |
+
+`SENSOR_MODE=prod ot-dashboard` is unlabeled; `LLM_ENDPOINT` is still fatal.
 
 ## Tests
 

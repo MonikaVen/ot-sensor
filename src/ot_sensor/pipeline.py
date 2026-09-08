@@ -51,18 +51,22 @@ class SensorPipeline:
         self.last_stix = None
         self.last_eval = None
 
-    def ingest_frames(self, frames) -> None:
+    def ingest_frames(self, frames) -> list:
+        new = []
         for fr in frames:
             self.honeypot.write_frame(fr)
             ev = self.n2k.convert(fr)
             self.events.append(ev)
             self.assets.observe(ev)
             self.graph.observe(ev)
+            new.append(ev)
+        return new
 
-    def run_window(self):
-        if not self.events:
+    def detect(self, events=None):
+        batch = events if events is not None else self.events
+        if not batch:
             return None
-        win = self.features.window(self.events)
+        win = self.features.window(batch)
         seq = self.features.lstm_seq([win])
         score = self.onnx.score(win, seq)
         hit = self.rules.gps_spoof_nav(win)
@@ -76,6 +80,9 @@ class SensorPipeline:
         elif inc:
             self.last_incident = inc
         return win, score, hit, inc
+
+    def run_window(self):
+        return self.detect(self.events)
 
 
 def run_spoof_lab(repo: Path, work: Path, mode: str = "dev", ticks: int = 12):

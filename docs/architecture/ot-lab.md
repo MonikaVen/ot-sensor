@@ -56,10 +56,13 @@ CLI: `SIM_MODE=dev opv-sim --attack gps-spoof-primary --ticks 8`
 | Local SLM | `LocalSlm` | `llm_unavailable` without GGUF; `LLM_ENDPOINT` fatal in prod | Template fallback |
 | STIX 2.1 | `StixExporter` | local file, `taxii_shared=False` | |
 | Eval join | `EvalJoin` | prod + label topic fatal | After emit; not in prompt |
+| Dashboard | `ot_sensor.app` | `test_dashboard.py` | Asset map snapshot, `/api/snapshot` |
 
 End-to-end: `test_pipeline.py` runs `gps-spoof-primary` ticks → `gps-spoof-nav` fire → `nis2_significant` → SLM fallback → STIX file. `dev` scores labels; `prod` has no label records.
 
 CLI: `SENSOR_MODE=dev ot-sensor --ticks 10`
+
+Operator UI: `ot-dashboard` (build `frontend/` first) on `:8443`.
 
 ## Dataflow (lab)
 

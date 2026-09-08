@@ -11,5 +11,7 @@ venv/
 .idea/
 .vscode/
 otlab-work/
+frontend/node_modules/
+frontend/dist/
 dist/
 build/

@@ -102,7 +102,12 @@ class IncidentCorrelator:
     ) -> Incident | None:
         hit = alert.rules[0]
         score = alert.models[0]
-        flood = score.scores.get("flood_score", 0) >= 0.8
+        dur = (window.t_end - window.t_start).total_seconds()
+        flood = (
+            score.scores.get("flood_score", 0) >= 0.8
+            and window.features.get("frames_per_s_norm", 0) >= 0.35
+            and dur >= 1.0
+        )
         if not hit.fired and not flood:
             return None
         family = "flood" if flood and not hit.fired else "gps-spoof"
