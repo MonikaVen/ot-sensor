@@ -13,8 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from ot_sensor.lab_runtime import LabRuntime
+from ot_sensor.paths import lab_root, sensor_root
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = lab_root()
 WORK = Path(os.environ.get("OTLAB_WORK", Path.cwd() / "otlab-work"))
 MODE = os.environ.get("SENSOR_MODE", "dev")
 
@@ -93,7 +94,7 @@ def ack(body: AckBody):
 
 
 def _mount_ui() -> None:
-    dist = REPO / "frontend" / "dist"
+    dist = sensor_root() / "frontend" / "dist"
     if dist.is_dir():
         app.mount("/", StaticFiles(directory=dist, html=True), name="ui")
 

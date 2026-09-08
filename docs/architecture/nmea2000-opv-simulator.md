@@ -264,4 +264,4 @@ Byte-level frames on the CAN channel are interchangeable. The sensor must not re
 
 ## Lab implementation
 
-Code and tests: [ot-lab.md](./ot-lab.md). CI uses `InMemoryCanBus`; `vcan_*` is still the ship TAP contract. `pytest tests` covers scenario, twins, gateways, injector, and labels. The lab binary is NMEA 2000 only.
+Code and tests: [ot-lab.md](./ot-lab.md). CI uses `InMemoryCanBus`; `vcan_*` is still the ship TAP contract. `uv run pytest` covers scenario, twins, gateways, injector, and labels. The lab binary is NMEA 2000 only.

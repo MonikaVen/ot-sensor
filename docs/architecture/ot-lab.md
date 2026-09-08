@@ -3,9 +3,8 @@
 Runnable **simulator** and **sensor** for the OPV architecture. Specs remain [nmea2000-opv-simulator.md](./nmea2000-opv-simulator.md) and [ot-sensor-nmea2000.md](./ot-sensor-nmea2000.md).
 
 ```
-python3.12 -m venv .venv
-.venv/bin/pip install -e '.[dev,onnx]'
-.venv/bin/pytest tests -q
+uv sync
+uv run pytest -q
 ```
 
 CI uses an **in-memory CAN bus** (`InMemoryCanBus`), not SocketCAN. Frame bytes and `segment` tags are the same contract as `vcan_*`. SocketCAN remains the ship TAP; it is not required to test services.
@@ -13,13 +12,15 @@ CI uses an **in-memory CAN bus** (`InMemoryCanBus`), not SocketCAN. Frame bytes 
 ## Layout
 
 ```
-src/otlab/          CanFrame, PGN pack, geo, in-memory bus
-src/opv_sim/        scenario, N2K twins, gateways, injector, labels
-src/ot_sensor/      adapters → honeypot, assets, graph, features, onnx, rules,
-                    incidents, slm, stix, eval
-tests/              one module per concern + end-to-end spoof
-docs/architecture/  specs and sample maps / models
+simulator/src/otlab/       CanFrame, PGN pack, geo, in-memory bus
+simulator/src/opv_sim/     scenario, N2K twins, gateways, injector, labels
+ot-sensor/src/ot_sensor/   adapters → honeypot, assets, graph, features, onnx, rules,
+                           incidents, slm, stix, eval, dashboard
+ot-sensor/frontend/        Vite + TypeScript operator UI
+docs/architecture/         specs and sample maps / models
 ```
+
+uv workspace: `simulator/` (`opv-sim`) and `ot-sensor/` (`ot-sensor`). The sensor depends on the simulator package for the in-process lab.
 
 Feature windows match the Bytewax contract (`FeatureWindow` + `event_id`). The lab operator is `FeatureStage` in-process. A later Bytewax worker can replace it without changing ONNX/rules/incidents.
 
@@ -37,7 +38,7 @@ NMEA 2000 only: `PlantState` → device twins → `InMemoryCanBus` / `vcan_*`. N
 | Attack injector | `AttackInjector` | overlay on twins | Labels only if `dev` |
 | Label topic | `LabelTopic` | prod + `LABEL_TOPIC` fatal | No publisher in `prod`; CAN still flows |
 
-CLI: `SIM_MODE=dev opv-sim --attack gps-spoof-primary --ticks 8`
+CLI: `SIM_MODE=dev uv run opv-sim --attack gps-spoof-primary --ticks 8`
 
 ## Sensor services (`SENSOR_MODE=dev|prod`)
 
@@ -60,9 +61,9 @@ CLI: `SIM_MODE=dev opv-sim --attack gps-spoof-primary --ticks 8`
 
 End-to-end: `test_pipeline.py` runs `gps-spoof-primary` ticks → `gps-spoof-nav` fire → `nis2_significant` → SLM fallback → STIX file. `dev` scores labels; `prod` has no label records.
 
-CLI: `SENSOR_MODE=dev ot-sensor --ticks 10`
+CLI: `SENSOR_MODE=dev uv run ot-sensor --ticks 10`
 
-Operator UI: `ot-dashboard` (build `frontend/` first) on `:8443`.
+Operator UI: `uv run ot-dashboard` (build `ot-sensor/frontend/` first) on `:8443`.
 
 ## Dataflow (lab)
 

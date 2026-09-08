@@ -6,6 +6,7 @@ import argparse
 import os
 from pathlib import Path
 
+from ot_sensor.paths import lab_root
 from ot_sensor.pipeline import run_spoof_lab
 
 
@@ -16,7 +17,7 @@ def main() -> None:
     args = p.parse_args()
     if args.mode == "prod" and os.environ.get("LLM_ENDPOINT"):
         raise SystemExit("LLM_ENDPOINT is fatal in SENSOR_MODE=prod")
-    repo = Path(__file__).resolve().parents[2]
+    repo = lab_root()
     work = Path.cwd() / "otlab-work"
     work.mkdir(exist_ok=True)
     sim, sensor, result = run_spoof_lab(repo, work, args.mode, args.ticks)

@@ -1232,4 +1232,4 @@ Model training, MITRE dataset packaging, CMS / combat-system buses, and any tran
 
 ## Lab implementation
 
-Code and tests: [ot-lab.md](./ot-lab.md). `FeatureStage` implements the Bytewax window contract in-process; ONNX and rules stay sibling enrichers. `pytest tests` covers each sensor service plus `gps-spoof-primary` end-to-end (`nis2_significant`, SLM fail-closed, local STIX).
+Code and tests: [ot-lab.md](./ot-lab.md). `FeatureStage` implements the Bytewax window contract in-process; ONNX and rules stay sibling enrichers. `uv run pytest` covers each sensor service plus `gps-spoof-primary` end-to-end (`nis2_significant`, SLM fail-closed, local STIX).

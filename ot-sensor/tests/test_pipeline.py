@@ -1,9 +1,10 @@
 from pathlib import Path
 
+from ot_sensor.paths import lab_root
 from ot_sensor.pipeline import run_spoof_lab
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = lab_root()
 
 
 def test_gps_spoof_end_to_end(tmp_path):

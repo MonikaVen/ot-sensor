@@ -16,9 +16,10 @@ from ot_sensor.slm import LocalSlm
 from ot_sensor.stix import StixExporter
 from otlab.pgn import encode_heading, encode_position
 from opv_sim import ScenarioEngine
+from ot_sensor.paths import lab_root
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = lab_root()
 
 
 def test_n2k_adapter_listen_only_prod():

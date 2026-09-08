@@ -1,9 +1,8 @@
-from pathlib import Path
-
 from ot_sensor.lab_runtime import LabRuntime
+from ot_sensor.paths import lab_root
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = lab_root()
 
 
 def test_runtime_inventory_and_incident(tmp_path):
