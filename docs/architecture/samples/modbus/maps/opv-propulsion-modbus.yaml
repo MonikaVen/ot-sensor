@@ -1,0 +1,23 @@
+# Plant points shared by the OPV simulator slave and the sensor reader.
+# Addresses are lab defaults, not a hull-specific map.
+unit_id: 1
+registers:
+  - name: rpm_port
+    func: 3
+    addr: 0
+    type: uint16
+    scale: 1
+  - name: rpm_stbd
+    func: 3
+    addr: 1
+    type: uint16
+    scale: 1
+  - name: oil_temp_c
+    func: 4
+    addr: 10
+    type: int16
+    scale: 0.1
+  - name: breaker_closed
+    func: 2
+    addr: 0
+    type: coil

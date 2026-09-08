@@ -1,0 +1,48 @@
+# Protocol ingest for the OT sensor. Bytewax / ONNX / rules / LLM / STIX
+# never import these files — they only see normalized units.
+#
+# SENSOR_SOURCES=nmea2000,modbus still works as a filter on `protocol`.
+# Omitted or empty → start every source with enabled: true.
+# Unknown protocol with no `adapter` module is a fatal startup error.
+
+hull: opv1
+defaults:
+  listen_only: true
+  writes: false          # prod refuses to start if any source sets writes: true
+
+canonical_fields: canonical-fields.yaml
+
+sources:
+  - id: n2k-nav
+    protocol: nmea2000
+    enabled: true
+    segment: nav
+    transport:
+      type: socketcan
+      iface: vcan_nav      # prod: hardware TAP iface
+    catalog: catalogs/pgn-2026.03.json
+
+  - id: n2k-prop
+    protocol: nmea2000
+    enabled: true
+    segment: propulsion
+    transport:
+      type: socketcan
+      iface: vcan_prop
+    catalog: catalogs/pgn-2026.03.json
+
+  - id: mb-prop
+    protocol: modbus
+    enabled: false         # opt-in; or SENSOR_SOURCES=modbus
+    segment: propulsion
+    include: ../modbus/modbus.yaml
+
+  - id: n0183-nav
+    protocol: nmea0183     # example of a third protocol
+    enabled: false
+    segment: nav
+    transport:
+      type: udp
+      bind: "0.0.0.0:10110"
+    map: maps/nmea0183-nav.yaml
+    # adapter: ot_sensor.adapters.nmea0183   # default from protocol id

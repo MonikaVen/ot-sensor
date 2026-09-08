@@ -1,0 +1,13 @@
+# Loaded when a source with protocol: modbus is enabled (sources.yaml
+# include, or SENSOR_SOURCES=modbus). The adapter maps registers onto
+# canonical field names; Bytewax never imports this file.
+transport: tcp
+role: poll
+segment: propulsion
+endpoints:
+  - host: 127.0.0.1
+    port: 1502
+    unit_id: 1
+    poll_ms: 200
+map: maps/opv-propulsion-modbus.yaml
+writes: false

@@ -1,0 +1,17 @@
+# Example third-protocol map. Adapter: nmea0183.
+# Native sentences → canonical fields. Unknown talkers still get an asset_ref
+# (talker id, e.g. GP, HE) and opaque leftover fields.
+
+sentences:
+  GGA:
+    lat: lat_deg
+    lon: lon_deg
+    hdop: hdop
+    sat: sat_count
+  RMC:
+    lat: lat_deg
+    lon: lon_deg
+    sog: sog_kn
+    cog: cog_deg
+  HDT:
+    heading: heading_deg

@@ -1,0 +1,45 @@
+model_id: throughput-lstm
+version: 1.0.0
+catalog_ver: "2026.03"
+window:
+  duration_s: 2.0
+  hop_s: 0.1
+  steps: 20
+scope:
+  segments: [nav, propulsion, power, aux]
+  pgns: ["*"]
+feature_schema:
+  - bus_load_pct
+  - frames_per_s_norm      # frames_per_s / 1500
+  - bytes_per_s_norm       # bytes_per_s / 25000
+  - mean_interarrival_norm # mean_interarrival_ms / 50
+  - unique_sa_norm         # unique_sa / 50
+  - unique_pgn_norm        # unique_pgn / 50
+  - error_frame_rate
+  - high_prio_share
+normalize:
+  frames_per_s: 1500
+  bytes_per_s: 25000
+  mean_interarrival_ms: 50
+  unique_sa: 50
+  unique_pgn: 50
+inputs:
+  - name: bus_seq
+    shape: [batch, 20, 8]
+    dtype: float32
+outputs:
+  - name: flood_score
+    shape: [batch, 1]
+    dtype: float32
+score_to_severity:
+  info: 0.40
+  warning: 0.65
+  critical: 0.80
+fire:
+  when: flood_score >= 0.80
+  attack_family: flood
+  techniques: [T0814]
+  impacts: [T0826]
+onnx:
+  path: model.onnx
+  opset: 17

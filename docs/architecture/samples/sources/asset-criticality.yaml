@@ -1,0 +1,26 @@
+# Functional dependency + criticality for the asset detector.
+# Distinct from the communication graph (who talks to whom).
+# depends_on: assets that this function needs in order to operate.
+
+hull: opv1
+criticality:
+  # 5 safety-critical  4 essential ops  3 supporting  2 hotel  1 lab/decoy
+  GNSS-1: { asset_id: "16", segment: nav, criticality: 5, nis2_service: navigation }
+  GNSS-2: { asset_id: "17", segment: nav, criticality: 5, nis2_service: navigation }
+  gyro: { asset_id: "35", segment: nav, criticality: 5, nis2_service: navigation }
+  autopilot: { asset_id: "56", segment: nav, criticality: 5, nis2_service: navigation }
+  rudder: { asset_id: "52", segment: nav, criticality: 5, nis2_service: navigation }
+  AIS: { asset_id: "24", segment: nav, criticality: 4, nis2_service: navigation }
+  MFD: { asset_id: "60", segment: nav, criticality: 3, nis2_service: navigation }
+  engine-port: { asset_id: "0", segment: propulsion, criticality: 4, nis2_service: propulsion }
+  engine-stbd: { asset_id: "1", segment: propulsion, criticality: 4, nis2_service: propulsion }
+  thruster: { asset_id: "12", segment: propulsion, criticality: 4, nis2_service: propulsion }
+  genset-1: { asset_id: "20", segment: power, criticality: 4, nis2_service: power }
+  decoy: { asset_id: "99", segment: nav, criticality: 1, nis2_service: none }
+
+dependencies:
+  - { asset: autopilot, depends_on: [GNSS-1, GNSS-2, gyro] }
+  - { asset: rudder, depends_on: [autopilot] }
+  - { asset: AIS, depends_on: [GNSS-1] }
+  - { asset: MFD, depends_on: [GNSS-1, GNSS-2, gyro] }
+  - { asset: thruster, depends_on: [genset-1] }

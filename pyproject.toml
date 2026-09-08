@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ot-sensor"
+version = "0.1.0"
+description = "OPV NMEA 2000 simulator and OT sensor"
+requires-python = ">=3.11"
+dependencies = [
+  "pyyaml>=6.0",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+onnx = ["onnxruntime>=1.17"]
+
+[project.scripts]
+opv-sim = "opv_sim.cli:main"
+ot-sensor = "ot_sensor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

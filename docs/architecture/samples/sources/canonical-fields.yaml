@@ -1,0 +1,17 @@
+# Canonical field dictionary. Adapters map protocol-native channels onto
+# these names so physics residuals and ONNX feature_schema are protocol-free.
+# Unmapped natives are still emitted as opaque (encoding: opaque) and logged.
+
+fields:
+  lat_deg: { unit: deg, kind: analog }
+  lon_deg: { unit: deg, kind: analog }
+  sog_kn: { unit: kn, kind: analog }
+  cog_deg: { unit: deg, kind: analog }
+  heading_deg: { unit: deg, kind: analog }
+  rot_deg_s: { unit: deg/s, kind: analog }
+  depth_m: { unit: m, kind: analog }
+  hdop: { unit: "1", kind: analog }
+  sat_count: { unit: "1", kind: analog }
+  rpm: { unit: rpm, kind: analog }
+  oil_temp_c: { unit: degC, kind: analog }
+  breaker_closed: { unit: bool, kind: discrete }

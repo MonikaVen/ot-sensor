@@ -1,0 +1,19 @@
+# Honeypot rotation and retention. TAP writer must not fsync or gzip inline.
+# Purge is oldest closed file first. The open-{pid} file is never deleted.
+
+rotate:
+  max_bytes: 134217728      # 128 MiB — close current file
+  max_age_s: 3600           # 1 h — whichever first
+  gzip: async               # after close, not on the SocketCAN thread
+
+retain:
+  max_bytes_per_segment: 2147483648   # 2 GiB closed+open
+  max_files_per_segment: 48
+  max_age_s: 2592000                  # 30 d (NIS2 final-report window)
+  hold_open_incidents: true           # skip purge while incident points here
+
+purge:
+  order: oldest_closed
+  never: [open]
+  record_in_manifest: true            # sha256 + path kept after unlink
+  if_cap_and_all_held: drop_new       # never block RX; count honeypot_dropped
