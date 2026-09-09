@@ -334,12 +334,14 @@ class LabRuntime:
             {
                 "id": "slm",
                 "label": "Local SLM",
-                "status": cop.status if cop else "idle",
+                "status": "ok" if self.sensor.slm.ready() else "llm_unavailable",
+                "detail": self.sensor.slm.runtime(),
             },
             {
                 "id": "assistant",
                 "label": "CyberPal",
-                "status": "ok" if self.assistant.ready() else "idle",
+                "status": "ok" if self.assistant.ready() else "llm_unavailable",
+                "detail": self.assistant.status().get("base_model"),
             },
             {"id": "stix", "label": "STIX", "status": "ok" if sensor.last_stix else "idle"},
         ]
@@ -609,6 +611,7 @@ def _incident_row(inc, sensor) -> dict:
         "nis2": nis2,
         "copilot": {
             "status": cop.status,
+            "runtime": cop.runtime,
             "alert_title": cop.alert_title,
             "alert_body": cop.alert_body,
             "recommend": list(cop.recommend),

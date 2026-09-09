@@ -1,4 +1,4 @@
-# cyberpal-2.0-4b 1.0.0
+# CyberPal 1.0.0 (lab SLM)
 
 Local cybersecurity assistant for **incident interpretation** and **investigation Q&A**. It is not a detector. Correlation already joined ONNX scores and rule fires; this model explains that case to a watchstander and answers follow-up questions.
 
@@ -7,18 +7,18 @@ One **chat session per incident**. The prompt is the correlated incident JSON (a
 | Item | Value |
 | --- | --- |
 | Role | Investigation assistant, post-correlation |
-| Runtime | Local Ollama on loopback, GGUF |
-| Size | ~4B, Q4_K_M (~2.5 GiB) |
-| Weights | `model.gguf` — **not** in git |
-| Timeout | 90 s; then heuristic fallback |
+| Runtime | Local Ollama on loopback |
+| Default SLM | `qwen2:1.5b` (already on the lab host); alias `cyberpal` |
+| Override | `OTLAB_CYBERPAL_MODEL` |
+| Timeout | 70 s; then heuristic fallback |
 | Network | `prod` denies any non-loopback endpoint |
 | GT | Never in the prompt |
 
-Official **CyberPal 2.0-4B** weights are not on Hugging Face yet (the public drop is `cyber-pal-security/CyberPal2.0-20B`). The lab GGUF is Qwen3-4B Instruct in the same size class the paper fine-tuned from Qwen3-4B-base.
+Official **CyberPal 2.0-4B** weights are not on Hugging Face yet. This lab uses the smallest available local instruct SLM with the CyberPal system prompt so investigation stays interactive on CPU.
 
 ## Failure modes
 
-Missing weights / Ollama down / timeout: `llm_unavailable`. The UI still shows a structured briefing built from the incident JSON. Chat answers stay grounded in that JSON.
+Ollama down / timeout: `llm_unavailable`. The UI still shows a structured briefing built from the incident JSON. Chat answers stay grounded in that JSON.
 
 ## Not this model
 

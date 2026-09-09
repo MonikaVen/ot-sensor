@@ -338,13 +338,13 @@ const SERVICE_SCHEMAS: Record<string, ServiceSchema> = {
   llm: {
     className: "CopilotAssessment",
     summary:
-      "Local GGUF SLM writes watchstander alert_title / alert_body. Does not fire detections. prod denies LLM_ENDPOINT.",
+      "Ollama SLM (qwen2:1.5b default) writes watchstander alert_title / alert_body. Does not fire detections. prod denies LLM_ENDPOINT.",
     consumes: "Incident",
     emits: "CopilotAssessment",
     fields: [
       ["incident_id", "str", "Incident this assessment belongs to"],
       ["model_id / version", "str", "watchstander-slm pin"],
-      ["runtime", "str", "local"],
+      ["runtime", "str", "qwen2:1.5b | gguf | none"],
       ["status", "str", "ok | llm_unavailable | schema_invalid"],
       ["alert_title", "str", "≤120 chars; incident list and NIS2 subject"],
       ["alert_body", "str", "≤1200 chars; watchstander text / STIX note"],
@@ -371,18 +371,14 @@ const SERVICE_SCHEMAS: Record<string, ServiceSchema> = {
   slm: {
     className: "LlmSpec",
     summary:
-      "GGUF pack. Missing file or timeout → llm_unavailable; incident still stands.",
+      "Ollama pack. Missing daemon or tag → llm_unavailable; incident still stands.",
     consumes: "—",
     emits: "LlmSpec",
     fields: [
       ["model_id", "str", "watchstander-slm"],
       ["version", "str", "Semver"],
-      ["runtime", "str", "llama.cpp"],
-      ["file", "str", "model.gguf — not in git"],
-      ["quant", "str", "Q4_K_M"],
-      ["ctx", "int", "4096"],
-      ["json_schema", "str", "operator-alert.schema.json"],
-      ["timeout_s", "int", "8"],
+      ["runtime", "str", "ollama"],
+      ["ollama_from", "str", "qwen2:1.5b default; OTLAB_SLM_MODEL override"],
       ["prod_network", "str", "deny"],
     ],
   },
@@ -1218,11 +1214,11 @@ function AttckView({ mode }: { mode: Mode }) {
       <H2>Local SLM writes the alert text</H2>
       <Text>
         Detection is ONNX + rules + correlation. The small LLM does{" "}
-        <Text weight="semibold">not</Text> fire alerts. On incident open or
-        material update it loads a local GGUF (~8B Q4_K_M, llama.cpp) and
-        writes <Code>alert_title</Code> / <Code>alert_body</Code> from{" "}
-        <Code>evidence_summary</Code>. Constrained JSON, then post-validate
-        techniques against the incident allowlist.{" "}
+        <Text weight="semibold">not</Text> fire alerts. On incident open it
+        checks local Ollama (<Code>OTLAB_SLM_MODEL</Code>, default{" "}
+        <Code>qwen2:1.5b</Code>) and marks the Local SLM pill{" "}
+        <Code>ok</Code> with that tag. Alert title/body stay a compact
+        template so TAP ingest is not blocked on generate.{" "}
         {mode === "dev"
           ? "In dev, technique IDs are scored against the label join after the fact. Loopback LLM_ENDPOINT is allowed for tests."
           : "In prod there is no label join. LLM_ENDPOINT is a fatal startup error."}{" "}
@@ -1230,8 +1226,8 @@ function AttckView({ mode }: { mode: Mode }) {
         and a template fallback. Risk and NIS2 clocks do not wait on the SLM.
       </Text>
       <Grid columns={3} gap={12}>
-        <Stat value="8B Q4" label="watchstander-slm" />
-        <Stat value="8 s" label="Timeout" />
+        <Stat value="1.5B" label="qwen2:1.5b default" />
+        <Stat value="2 s" label="Ollama tags check" />
         <Stat
           value={mode === "dev" ? "Loopback ok" : "No remote"}
           label="Network"
@@ -1252,8 +1248,8 @@ function AttckView({ mode }: { mode: Mode }) {
       <Callout tone="info" title="gps-spoof-underway example">
         Title: GNSS-1 walked off dead-reckoning; distrust position and AIS.
         Body tells the watchstander HDOP stayed low (not GNSS-degraded) and
-        not to let autopilot follow spoofed COG. Fallback if the GGUF is
-        missing: <Code>critical gps-spoof-nav on assets 16; risk 86</Code>.
+        not to let autopilot follow spoofed COG. Fallback if Ollama is
+        down: <Code>critical gps-spoof-nav on assets 16; risk 86</Code>.
       </Callout>
       <Callout tone="warning" title="No unsupervised actuation">
         SLM tools must not write PGNs, change engine or autopilot state, or
@@ -1463,7 +1459,7 @@ function WorkflowsView() {
         rows={[
           ["Live TAP ingest", "active", "GET /api/tap → N2K adapter → OTEvent"],
           ["GPS spoof detection", "active", "gps-spoof-nav ∥ throughput-lstm → Incident → NIS2"],
-          ["Watchstander text", "fallback", "LocalSlm template until watchstander-slm GGUF"],
+          ["Watchstander text", "active", "LocalSlm ok when Ollama lists OTLAB_SLM_MODEL"],
           ["CyberPal investigation", "active", "correlation JSON → one Ollama session per incident"],
           ["Honeypot capture", "active", "raw TAP → otlab-work/hp + Honeypot tab"],
           ["Batch CLI", "active", "uv run ot-sensor --ticks 10"],
@@ -1473,7 +1469,7 @@ function WorkflowsView() {
         rowTone={[
           "success",
           "success",
-          "warning",
+          "success",
           "success",
           "success",
           "success",
@@ -1628,7 +1624,7 @@ export default function OtSensorNmea2000Architecture() {
             "Subscribe; off-bus eval join",
             "Not bound — fatal if LABEL_TOPIC set",
           ],
-          ["Local SLM", "GGUF on host; incident prompt, no GT", "Same; LLM_ENDPOINT fatal"],
+          ["Local SLM", "Ollama on host; incident prompt, no GT", "Same; LLM_ENDPOINT fatal"],
           ["Honeypot logs", "Self-describing filenames; raw, any format", "Same; no GT in name or body"],
           ["Asset inventory", "Live catalog + change events", "Live catalog + change events; no GT"],
           ["Comms graph", "Expected vs live overlay", "Same; no GT"],

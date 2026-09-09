@@ -42,6 +42,42 @@ npm install --prefix ot-sensor/frontend
 npm run build --prefix ot-sensor/frontend
 ```
 
+## Local SLM (Ollama)
+
+Watchstander alert text and the CyberPal assistant both use a **local Ollama** instruct model on loopback. They do not call a cloud LLM. `SENSOR_MODE=prod` still refuses `LLM_ENDPOINT`.
+
+1. Install [Ollama](https://ollama.com) and start it (default `http://127.0.0.1:11434`):
+
+```bash
+ollama serve
+```
+
+2. Pull a small instruct tag (this lab host uses `qwen2:1.5b`):
+
+```bash
+ollama pull qwen2:1.5b
+```
+
+3. Point the sensor at that tag and create the `cyberpal` alias (system prompt + keep-alive):
+
+```bash
+export OLLAMA_HOST=http://127.0.0.1:11434   # optional; this is the default
+export OTLAB_SLM_MODEL=qwen2:1.5b           # or OTLAB_CYBERPAL_MODEL
+uv run python -m ot_sensor.cyberpal
+```
+
+The dashboard health pills **Local SLM** and **CyberPal** turn green and show the tag (`qwen2:1.5b`) when Ollama answers `/api/tags` with that model. If Ollama is down, both pills show `llm_unavailable` and the UI falls back to template alert text / heuristic investigation notes.
+
+| Variable | Effect |
+| --- | --- |
+| `OLLAMA_HOST` | Ollama base URL (default `http://127.0.0.1:11434`) |
+| `OTLAB_SLM_MODEL` | Exact Ollama tag for Local SLM + CyberPal |
+| `OTLAB_CYBERPAL_MODEL` | Same as `OTLAB_SLM_MODEL` (either is enough) |
+
+```bash
+OTLAB_SLM_MODEL=qwen2:latest uv run ot-dashboard --mode dev --port 8443 --sim-url http://127.0.0.1:8444
+```
+
 ## Run (typical lab)
 
 ```bash
@@ -67,4 +103,4 @@ uv run pytest -q
 | Where | Lab / CI | Lab only (unlabeled path). Never on the vessel |
 | Simulator labels | Off-bus, in-memory | **Absent.** `LABEL_TOPIC` is fatal |
 | Sensor eval join | After emit; not in SLM / CyberPal | **Absent** |
-| Sensor LLM | Local GGUF only | `LLM_ENDPOINT` is fatal |
+| Sensor LLM | Local Ollama (or GGUF) | `LLM_ENDPOINT` is fatal |

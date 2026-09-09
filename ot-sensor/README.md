@@ -17,7 +17,7 @@ Package: `ot-sensor/` in the uv workspace. Spec: [docs/architecture/ot-sensor-nm
 | ONNX enrich | `onnx_enrich.OnnxEnrich` | `FeatureWindow` | `ModelScore` (`throughput-lstm` or `model_unavailable`) |
 | Rules enrich | `rules.RulesEnrich` | `FeatureWindow` | `RuleHit` (`gps-spoof-nav`) |
 | Incidents | `incidents.IncidentCorrelator` | scores + hits | `Incident`, risk, NIS2 clocks |
-| Watchstander SLM | `slm.LocalSlm` | incident summary | `CopilotAssessment` (template if no GGUF) |
+| Watchstander SLM | `slm.LocalSlm` | incident summary | `CopilotAssessment` (Ollama `ok`, else template) |
 | CyberPal assistant | `assistant.CyberPalAssistant` | correlation JSON | one session per `incident_id` |
 | STIX | `stix.StixExporter` | incident + assessment | local bundle (`taxii_shared=false`) |
 | Dashboard | `ot_sensor.app` | `/api/snapshot` | UI on `:8443` |
@@ -25,6 +25,26 @@ Package: `ot-sensor/` in the uv workspace. Spec: [docs/architecture/ot-sensor-nm
 Adapters for Modbus and NMEA 0183 exist. The live TAP in this lab is **NMEA 2000 only**.
 
 `SENSOR_MODE=prod` refuses `LLM_ENDPOINT` and a label topic. Ground truth never enters the SLM or CyberPal prompt.
+
+## Local SLM (Ollama)
+
+Watchstander titles and CyberPal investigation share one local Ollama process. Start Ollama, pull a tag, then point the app at it:
+
+```bash
+ollama serve
+ollama pull qwen2:1.5b
+export OLLAMA_HOST=http://127.0.0.1:11434          # default
+export OTLAB_SLM_MODEL=qwen2:1.5b                  # or OTLAB_CYBERPAL_MODEL
+uv run python -m ot_sensor.cyberpal                # alias `cyberpal` FROM that tag
+```
+
+The dashboard **Local SLM** and **CyberPal** pills show the tag when `/api/tags` lists it. Override per process:
+
+```bash
+OTLAB_SLM_MODEL=qwen2:latest uv run ot-dashboard --mode dev --port 8443 --sim-url http://127.0.0.1:8444
+```
+
+`SENSOR_MODE=prod` still refuses `LLM_ENDPOINT`. Ground truth never enters the prompt.
 
 ## Install
 
@@ -39,13 +59,6 @@ Or install the whole workspace (`uv sync`). Node is required to build the dashbo
 ```bash
 npm install --prefix ot-sensor/frontend
 npm run build --prefix ot-sensor/frontend
-```
-
-CyberPal (optional investigation model). Official `CyberPal2.0-4B` is not published; the lab imports Qwen3-4B Instruct GGUF as `cyberpal-2.0-4b`:
-
-```bash
-# Ollama must already be running on 127.0.0.1:11434
-uv run python -m ot_sensor.cyberpal
 ```
 
 ## Run

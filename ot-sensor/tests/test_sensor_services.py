@@ -287,9 +287,10 @@ def test_incidents_risk_nis2():
     assert inc2.alert_count == 2
 
 
-def test_slm_fail_closed_no_gguf():
+def test_slm_fail_closed_no_gguf(monkeypatch):
     from ot_sensor.incidents import Incident, RiskScore
 
+    monkeypatch.setattr("ot_sensor.slm.ollama_ready", lambda: False)
     t = datetime.now(timezone.utc)
     inc = Incident(
         "inc-1",
@@ -314,6 +315,42 @@ def test_slm_fail_closed_no_gguf():
         LocalSlm(None, "https://api.openai.com", "prod")
     cop = LocalSlm(None, None, "prod").assess(inc)
     assert cop.status == "llm_unavailable"
+    assert cop.runtime == "none"
+    assert "risk 86" in cop.alert_title
+
+
+def test_slm_ok_when_ollama_ready(monkeypatch):
+    from ot_sensor.incidents import Incident, RiskScore
+
+    monkeypatch.setattr("ot_sensor.slm.ollama_ready", lambda: True)
+    monkeypatch.setattr("ot_sensor.slm.base_model", lambda runtime=None: "qwen2:1.5b")
+    monkeypatch.setattr("ot_sensor.slm.resolve_model", lambda: "cyberpal")
+    t = datetime.now(timezone.utc)
+    inc = Incident(
+        "inc-1",
+        "open",
+        t,
+        t,
+        "critical",
+        RiskScore(86, 40, 22, 16, 8, 5, ["56"], True),
+        None,
+        "nmea2000",
+        "n2k-nav",
+        "nav",
+        ["16"],
+        ["T1692.002"],
+        ["T0832"],
+        1,
+        [],
+        {},
+        "dev",
+    )
+    slm = LocalSlm(None, None, "dev")
+    assert slm.ready()
+    assert slm.runtime() == "qwen2:1.5b"
+    cop = slm.assess(inc)
+    assert cop.status == "ok"
+    assert cop.runtime == "qwen2:1.5b"
     assert "risk 86" in cop.alert_title
 
 
@@ -337,6 +374,18 @@ def test_eval_join_dev_only():
     with pytest.raises(RuntimeError):
         EvalJoin("prod", label_topic_set=True)
     assert EvalJoin("prod").enabled is False
+
+
+def test_cyberpal_picks_small_slm(monkeypatch):
+    import ot_sensor.cyberpal as c
+
+    monkeypatch.setattr(c, "ollama_tags", lambda: ["qwen2:1.5b", "qwen2:latest", "cyberpal-2.0-4b", "qwen2"])
+    assert c._pick(c.ollama_tags()) == "qwen2:1.5b"
+    monkeypatch.setattr(c, "ollama_tags", lambda: ["cyberpal:latest", "qwen2:1.5b", "qwen2"])
+    assert c._pick(c.ollama_tags()) == "cyberpal"
+    assert c.base_model("cyberpal") == "qwen2:1.5b"
+    looped = "Observe spoofed talkers. Observe spoofed talkers. Distrust GNSS-1. Observe spoofed talkers."
+    assert c._collapse(looped) == "Observe spoofed talkers. Distrust GNSS-1."
 
 
 def test_cyberpal_briefing_strips_raw_and_isolates_sessions(tmp_path, monkeypatch):

@@ -212,12 +212,15 @@ def test_honeypot_snapshot_and_clear(tmp_path):
 
 def test_assistant_session_per_incident(tmp_path, monkeypatch):
     monkeypatch.setattr("ot_sensor.assistant.ollama_ready", lambda: False)
+    monkeypatch.setattr("ot_sensor.slm.ollama_ready", lambda: False)
     rt = LabRuntime(REPO, tmp_path, "dev")
     for _ in range(8):
         rt.step()
     snap = rt.snapshot()
-    assert snap["assistant"]["model"] == "cyberpal-2.0-4b"
+    assert snap["assistant"]["model"] == "cyberpal"
     assert any(s["id"] == "assistant" for s in snap["services"])
+    slm = next(s for s in snap["services"] if s["id"] == "slm")
+    assert slm["status"] == "llm_unavailable"
     ids = [i["incident_id"] for i in snap["incidents"]]
     assert ids
     first = rt.assistant_handle(ids[0])
@@ -237,5 +240,19 @@ def test_assistant_session_per_incident(tmp_path, monkeypatch):
     assert miss["ok"] is False
     rt.reset()
     assert rt.assistant.sessions == {}
+
+
+def test_slm_pill_shows_ollama_model(tmp_path, monkeypatch):
+    monkeypatch.setattr("ot_sensor.slm.ollama_ready", lambda: True)
+    monkeypatch.setattr("ot_sensor.slm.base_model", lambda runtime=None: "qwen2:1.5b")
+    monkeypatch.setattr("ot_sensor.slm.resolve_model", lambda: "cyberpal")
+    monkeypatch.setattr("ot_sensor.assistant.ollama_ready", lambda: True)
+    rt = LabRuntime(REPO, tmp_path, "dev")
+    snap = rt.snapshot()
+    slm = next(s for s in snap["services"] if s["id"] == "slm")
+    assert slm["status"] == "ok"
+    assert slm["detail"] == "qwen2:1.5b"
+    asst = next(s for s in snap["services"] if s["id"] == "assistant")
+    assert asst["status"] == "ok"
 
 

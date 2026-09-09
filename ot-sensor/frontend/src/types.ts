@@ -2,6 +2,7 @@ export type ServiceStatus = {
   id: string;
   label: string;
   status: string;
+  detail?: string | null;
 };
 
 export type Asset = {
@@ -118,6 +119,7 @@ export type Incident = {
   } | null;
   copilot?: {
     status: string;
+    runtime?: string;
     alert_title: string;
     alert_body: string;
     recommend: string[];
@@ -175,6 +177,7 @@ export type Snapshot = {
   copilot: {
     incident_id: string;
     status: string;
+    runtime?: string;
     alert_title: string;
     alert_body: string;
     recommend: string[];
@@ -205,10 +208,13 @@ export type Snapshot = {
     packs: ModelPack[];
   };
   honeypot?: HoneypotSnap;
-  assistant?: {
+    assistant?: {
     model: string;
+    runtime?: string | null;
+    base_model?: string | null;
     status: string;
     loaded: boolean;
+    last_error?: string | null;
     sessions?: string[];
   };
 };
@@ -276,6 +282,9 @@ export type AssistantSession = {
   status: string;
   source?: string;
   model?: string;
+  runtime?: string | null;
+  base_model?: string | null;
+  last_error?: string | null;
   loaded?: boolean;
   alert_count?: number;
 };

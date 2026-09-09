@@ -7,7 +7,8 @@ from ot_sensor.pipeline import run_spoof_lab
 REPO = lab_root()
 
 
-def test_gps_spoof_end_to_end(tmp_path):
+def test_gps_spoof_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.setattr("ot_sensor.slm.ollama_ready", lambda: False)
     sim, sensor, result = run_spoof_lab(REPO, tmp_path, mode="dev", ticks=12)
     win, score, hit, inc = result
     assert hit.fired

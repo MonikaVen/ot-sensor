@@ -49,11 +49,12 @@ function tone(status: string): string {
 
 function healthHtml(snap: Snapshot): string {
   return `<div class="health-row" aria-label="Service health">${snap.services
-    .map(
-      (s) => `<div class="health-pill ${tone(s.status)}" title="${esc(s.status)}">
+    .map((s) => {
+      const shown = s.status === "ok" && s.detail ? s.detail : s.status;
+      return `<div class="health-pill ${tone(s.status)}" title="${esc(s.label)} · ${esc(shown)}">
         <span class="dot"></span><span class="health-label">${esc(s.label)}</span>
-        <span class="health-status">${esc(s.status)}</span></div>`,
-    )
+        <span class="health-status">${esc(shown)}</span></div>`;
+    })
     .join("")}</div>`;
 }
 
@@ -518,7 +519,7 @@ function caseHtml(inc: Incident, copilot: Snapshot["copilot"]): string {
         <p>Human confirm: ${inc.nis2.human_confirm ? "yes" : "required before CSIRT"}</p></div>`
     : "";
   const slm = slmSrc
-    ? `<div class="slm-block"><p class="muted">SLM ${esc(slmSrc.status)}</p>${inc.body || slmSrc.alert_body ? `<p class="toast-body">${esc(inc.body || slmSrc.alert_body)}</p>` : ""}</div>`
+    ? `<div class="slm-block"><p class="muted">SLM ${esc(slmSrc.status)}${slmSrc.runtime ? ` · ${esc(slmSrc.runtime)}` : ""}</p>${inc.body || slmSrc.alert_body ? `<p class="toast-body">${esc(inc.body || slmSrc.alert_body)}</p>` : ""}</div>`
     : "";
   return `<section class="case">
     <h2>${esc(inc.incident_id)}</h2>
@@ -558,6 +559,7 @@ function assistantPageHtml(snap: Snapshot): string {
   const loaded = snap.assistant?.loaded || sess?.loaded;
   const status = sess?.status || snap.assistant?.status || "idle";
   const source = sess?.source ? ` · ${sess.source}` : "";
+    const runtime = sess?.base_model || sess?.runtime || snap.assistant?.base_model || snap.assistant?.runtime || "qwen2:1.5b";
   const interp = sess?.interpretation
     ? `<div class="assistant-brief">${esc(sess.interpretation)}</div>`
     : `<p class="muted">${state.assistantBusy ? "Interpreting incident…" : "Select a case to load a CyberPal briefing."}</p>`;
@@ -570,10 +572,11 @@ function assistantPageHtml(snap: Snapshot): string {
   return `<div class="models-page assistant-page">
     <div class="map-toolbar models-toolbar">
       <h2>Assistant</h2>
-      <p class="muted">CyberPal 2.0-4B · one session per incident · correlation JSON only · listen-only</p>
+      <p class="muted">CyberPal · ${esc(runtime)} · one session per incident · correlation JSON only · listen-only</p>
       <span class="rule-status ${loaded ? "" : "off"}">${esc(status)}${esc(source)}</span>
       <button type="button" class="btn" data-ctrl="assistant-refresh" ${selected ? "" : "disabled"}>Re-interpret</button>
     </div>
+    ${sess?.last_error && sess.source === "heuristic" ? `<p class="banner">${esc(sess.last_error)}</p>` : ""}
     ${state.assistantError ? `<p class="banner">${esc(state.assistantError)}</p>` : ""}
     <div class="models-grid assistant-grid">
       <div class="models-col">

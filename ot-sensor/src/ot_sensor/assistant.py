@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ot_sensor.cyberpal import chat, gguf_path, ollama_ready
+from ot_sensor.cyberpal import base_model, chat, gguf_path, ollama_ready, resolve_model
 
 
 def briefing_payload(incident: dict, assets: list[dict] | None = None) -> dict:
@@ -201,16 +201,21 @@ class CyberPalAssistant:
         self.work = Path(work)
         self.sessions: dict[str, AssistantSession] = {}
         self._ready: bool | None = None
+        self._last_error: str | None = None
 
     def status(self) -> dict:
         ready = self.ready()
-        path = gguf_path(self.work, self.repo)
+        runtime = resolve_model()
+        path = gguf_path(self.work, self.repo) if (runtime or "").startswith("cyberpal-2.0-4b") else None
         return {
-            "model": "cyberpal-2.0-4b",
+            "model": "cyberpal",
+            "runtime": runtime,
+            "base_model": base_model(runtime),
             "version": "1.0.0",
             "status": "ok" if ready else "llm_unavailable",
             "loaded": ready,
             "gguf": str(path) if path else None,
+            "last_error": self._last_error,
             "sessions": list(self.sessions),
         }
 
@@ -218,6 +223,15 @@ class CyberPalAssistant:
         if not self._ready:
             self._ready = ollama_ready()
         return bool(self._ready)
+
+    def warmup(self) -> None:
+        if not self.ready():
+            return
+        try:
+            chat([{"role": "user", "content": "ok"}], timeout=40)
+            self._last_error = None
+        except Exception as e:
+            self._last_error = str(e)
 
     def clear(self) -> None:
         self.sessions.clear()
@@ -232,6 +246,9 @@ class CyberPalAssistant:
             "source": sess.source,
             "model": st["model"],
             "loaded": st["loaded"],
+            "runtime": st.get("runtime"),
+            "base_model": st.get("base_model"),
+            "last_error": self._last_error,
             "alert_count": sess.alert_count,
         }
 
@@ -270,16 +287,16 @@ class CyberPalAssistant:
         if not self.ready():
             return fallback, "llm_unavailable", "heuristic"
         prompt = (
-            "Write a watchstander briefing in at most 8 short sentences. "
-            "Cover what fired, assets, ATT&CK, risk/NIS2, and next observe-only checks. "
-            "No bus writes.\n\nINCIDENT JSON:\n" + _json(payload)
+            "Write a watchstander briefing in at most 6 short sentences. "
+            "Each sentence must add a new fact from the JSON (what fired, assets, ATT&CK, risk/NIS2, observe-only next step). "
+            "No bus writes. Do not repeat a sentence.\n\nINCIDENT JSON:\n" + _json(payload)
         )
         try:
             text = chat([{"role": "user", "content": prompt}])
+            self._last_error = None
             return text, "ok", "cyberpal"
-        except Exception:
-            if not ollama_ready():
-                self._ready = False
+        except Exception as e:
+            self._last_error = str(e)
             return fallback, "llm_unavailable", "heuristic"
 
     def _answer(self, payload: dict, sess: AssistantSession) -> tuple[str, str, str]:
@@ -290,7 +307,7 @@ class CyberPalAssistant:
         history = [
             {
                 "role": "user",
-                "content": "Incident JSON (investigation only). Answer later questions in at most 6 sentences.\n" + _json(payload),
+                "content": "Incident JSON (investigation only). Answer later questions in at most 6 sentences.\n" + _json(_ask_payload(payload)),
             }
         ]
         history.append({"role": "assistant", "content": sess.interpretation or fallback})
@@ -298,11 +315,30 @@ class CyberPalAssistant:
             history.append({"role": m["role"], "content": m["content"]})
         try:
             text = chat(history)
+            self._last_error = None
             return text, "ok", "cyberpal"
-        except Exception:
-            if not ollama_ready():
-                self._ready = False
+        except Exception as e:
+            self._last_error = str(e)
             return fallback, "llm_unavailable", "heuristic"
+
+
+def _ask_payload(payload: dict) -> dict:
+    return {
+        "incident_id": payload.get("incident_id"),
+        "state": payload.get("state"),
+        "severity": payload.get("severity"),
+        "families": payload.get("families"),
+        "asset_ids": payload.get("asset_ids"),
+        "techniques": payload.get("techniques"),
+        "impacts": payload.get("impacts"),
+        "fired_rules": payload.get("fired_rules"),
+        "risk": payload.get("risk"),
+        "evidence_summary": payload.get("evidence_summary"),
+        "assets": [
+            {"asset_id": a.get("asset_id"), "name": a.get("name"), "dependents": a.get("dependents")}
+            for a in payload.get("assets") or []
+        ],
+    }
 
 
 def _edge(e):

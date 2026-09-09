@@ -1,22 +1,17 @@
 # Local small LLM for watchstander alert text. Not a detector.
-# Weights are not in git (GGUF). Pipeline loads this directory the same way
-# as models/throughput-lstm — fail closed if the file is missing.
+# Lab default: same Ollama tag as CyberPal (qwen2:1.5b). Optional GGUF fallback.
 
 model_id: watchstander-slm
 version: 1.0.0
-runtime: llama.cpp
+runtime: ollama
+ollama_model: cyberpal
+ollama_from: qwen2:1.5b
 file: model.gguf
-quant: Q4_K_M
-params_b: 8
-ctx: 4096
-max_new_tokens: 512
-timeout_s: 8
-json_schema: operator-alert.schema.json
 fail: closed
 prod_network: deny
 catalog_ver: "2026.03"
 allow_techniques_from: incident
 no_ground_truth: true
 hardware:
-  ram_gb_min: 8
+  ram_gb_min: 4
   gpu: optional

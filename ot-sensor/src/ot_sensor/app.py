@@ -28,9 +28,11 @@ runtime = LabRuntime(REPO, WORK, MODE, tap_url=TAP_URL, drive_sim=DRIVE_SIM)
 async def lifespan(app: FastAPI):
     WORK.mkdir(parents=True, exist_ok=True)
     task = asyncio.create_task(_tick_loop())
+    warm = asyncio.create_task(asyncio.to_thread(runtime.assistant.warmup))
     yield
     runtime.running = False
     task.cancel()
+    warm.cancel()
     try:
         await task
     except asyncio.CancelledError:

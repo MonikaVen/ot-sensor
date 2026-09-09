@@ -56,7 +56,7 @@ Injector UI: `uv run opv-sim --serve --port 8444`
 | ONNX enrich | `OnnxEnrich` | `throughput-lstm` or `model_unavailable` | Extra `otlab[onnx]` |
 | Rules enrich | `RulesEnrich.gps_spoof_nav` | fires on healthy-DOP walk-off | Parallel to ONNX |
 | Incidents | `IncidentCorrelator` | risk + NIS2; hop dedup | Does not wait on SLM |
-| Local SLM | `LocalSlm` | `llm_unavailable` without GGUF; `LLM_ENDPOINT` fatal in prod | Template fallback |
+| Local SLM | `LocalSlm` | `ok` when Ollama has the configured tag; `llm_unavailable` otherwise | Template titles if Ollama is down; `LLM_ENDPOINT` fatal in prod |
 | CyberPal assistant | `CyberPalAssistant` | one session per incident; `/api/assistant` | Correlation JSON only; not a detector |
 | STIX 2.1 | `StixExporter` | local file, `taxii_shared=False` | |
 | Eval join | `EvalJoin` | prod + label topic fatal | After emit; not in prompt |
@@ -66,7 +66,9 @@ End-to-end: `test_pipeline.py` runs `gps-spoof-primary` ticks → `gps-spoof-nav
 
 CLI: `SENSOR_MODE=dev uv run ot-sensor --ticks 10`
 
-Operator UI: `uv run ot-dashboard` (build `ot-sensor/frontend/` first) on `:8443`. Injector stays on `:8444`. Dashboard polls `OPV_SIM_URL` / `--sim-url` (`GET /api/tap`); it does not tick the plant. Assistant tab talks to local Ollama `cyberpal-2.0-4b` (`uv run python -m ot_sensor.cyberpal`).
+Operator UI: `uv run ot-dashboard` (build `ot-sensor/frontend/` first) on `:8443`. Injector stays on `:8444`. Dashboard polls `OPV_SIM_URL` / `--sim-url` (`GET /api/tap`); it does not tick the plant.
+
+Local language models: start Ollama (`ollama serve`), `ollama pull qwen2:1.5b`, then `OTLAB_SLM_MODEL=qwen2:1.5b uv run python -m ot_sensor.cyberpal`. Health pills **Local SLM** and **CyberPal** show that tag. See [ot-sensor/README.md](../../ot-sensor/README.md).
 
 ## Dataflow (lab)
 
@@ -85,6 +87,5 @@ dev: LabelTopic ──→ EvalJoin (after SLM)
 ## Still not in this tree
 
 - Linux `vcan_*` / SocketCAN TAP reader (needed before Redpanda/NATS on the hot path)
-- GGUF `watchstander-slm` weights (fail closed)
 - TAXII listener `:8444`, operator HTTPS `:8443`
 - Full PGN catalog `pgn-2026.03.json` (lab codec covers the spoof/flood PGNs only)
