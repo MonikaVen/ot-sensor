@@ -51,9 +51,22 @@ def encode_rpm(t, segment: str, sa: int, rpm: float) -> CanFrame:
     return CanFrame(t, segment, pack_id(127488, sa), data[:8])
 
 
-def encode_claim(t, segment: str, sa: int, name: bytes = b"LABTWIN\x00") -> CanFrame:
-    data = (name + b"\x00" * 8)[:8]
+def encode_claim(t, segment: str, sa: int, name: str | bytes = "LABTWIN") -> CanFrame:
+    raw = name.encode("ascii", "replace") if isinstance(name, str) else name
+    data = (raw + b"\x00" * 8)[:8]
     return CanFrame(t, segment, pack_id(60928, sa, da=255), data)
+
+
+def encode_iso_request(t, segment: str, sa: int, da: int, requested_pgn: int) -> CanFrame:
+    data = bytes(
+        [requested_pgn & 0xFF, (requested_pgn >> 8) & 0xFF, (requested_pgn >> 16) & 0xFF]
+    ) + b"\xff\xff\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(59904, sa, da=da), data[:8])
+
+
+def encode_heading_control(t, segment: str, sa: int, heading_deg: float) -> CanFrame:
+    data = b"\x00" + _u16(math.radians(heading_deg), 1e-4) + b"\xff\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(127237, sa), data[:8])
 
 
 def decode_fields(frame: CanFrame) -> dict:
@@ -80,8 +93,15 @@ def decode_fields(frame: CanFrame) -> dict:
     elif pgn == 127488 and len(data) >= 3:
         rpm = struct.unpack("<H", data[1:3])[0] * 0.25
         out.update(rpm=rpm, operation_name="engine_rapid")
+    elif pgn == 127237 and len(data) >= 3:
+        hdg = struct.unpack("<H", data[1:3])[0] * 1e-4
+        out.update(heading_deg=math.degrees(hdg), operation_name="heading_control", privileged=True)
+    elif pgn == 59904:
+        req = data[0] | (data[1] << 8) | (data[2] << 16) if len(data) >= 3 else 0
+        out.update(requested_pgn=req, operation_name="iso_request", privileged=True)
     elif pgn == 60928:
-        out.update(operation_name="address_claim", privileged=True)
+        iso_name = data.split(b"\x00", 1)[0].decode("ascii", "replace").strip()
+        out.update(operation_name="address_claim", privileged=True, iso_name=iso_name)
     else:
         out["operation_name"] = f"pgn_{pgn}"
     return out

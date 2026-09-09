@@ -27,10 +27,23 @@ class Nmea2000Adapter:
         da = None if fields["da"] == 255 else str(fields["da"])
         privileged = bool(fields.get("privileged"))
         is_control = pgn in (127237,)
+        is_write = pgn in (127237,)
+        category = "identity" if pgn == 60928 else "read" if pgn == 59904 else "control" if is_write else "report"
         value = {
             k: v
             for k, v in fields.items()
-            if k in ("lat_deg", "lon_deg", "cog_deg", "sog_kn", "heading_deg", "hdop", "sat_count", "rpm")
+            if k in (
+                "lat_deg",
+                "lon_deg",
+                "cog_deg",
+                "sog_kn",
+                "heading_deg",
+                "hdop",
+                "sat_count",
+                "rpm",
+                "iso_name",
+                "requested_pgn",
+            )
         }
         return OTEvent(
             event_id=_eid(),
@@ -38,13 +51,13 @@ class Nmea2000Adapter:
             protocol="nmea2000",
             source_asset_id=sa,
             destination_asset_id=da,
-            operation_category="identity" if pgn == 60928 else "report",
+            operation_category=category,
             operation_name=fields.get("operation_name", "pgn"),
             object_type="pgn",
             object_address=str(pgn),
             value_before=None,
             value_after=value or None,
-            is_write=False,
+            is_write=is_write,
             is_control=is_control,
             is_configuration=pgn == 60928,
             privileged=privileged,

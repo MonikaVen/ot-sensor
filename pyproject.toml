@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "OPV NMEA 2000 lab: simulator + OT sensor"
 requires-python = ">=3.12"
 dependencies = [
-  "opv-sim",
+  "opv-sim[ui]",
   "ot-sensor[onnx,ui]",
 ]
 

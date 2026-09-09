@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OPV simulator — injector</title>
+    <style>
+      :root {
+        --bg: #0c1014;
+        --panel: #141a21;
+        --stroke: #2a3340;
+        --text: #e6ebf1;
+        --muted: #8b97a8;
+        --accent: #3d8bfd;
+        --ok: #3caf7a;
+        --bad: #d45b4c;
+        --warn: #c9a227;
+        --nav: #3d8bfd;
+        --prop: #c9a227;
+        --power: #3caf7a;
+        --aux: #8b97a8;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+      body { display: flex; flex-direction: column; }
+      header {
+        display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between;
+        align-items: flex-end; padding: 16px 20px; border-bottom: 1px solid var(--stroke);
+        background: var(--panel); flex-shrink: 0;
+      }
+      .ownship {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 20px 28px;
+        padding: 10px 16px 12px; border-top: 1px solid var(--stroke);
+        background: #0e151c; flex-shrink: 0;
+      }
+      .ownship-globe { position: relative; width: 132px; height: 132px; flex-shrink: 0; }
+      #own-globe { width: 132px; height: 132px; display: block; }
+      .ownship-readout { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
+      .ownship-readout dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; margin: 0; min-width: 340px; }
+      .ownship-readout dd { font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; letter-spacing: 0.01em; }
+      .ownship-readout .hot dd { color: var(--bad); }
+      .ownship h2 { margin: 0 0 6px; }
+      .kicker { margin: 0; color: var(--muted); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+      h1 { margin: 2px 0 0; font-size: 22px; font-weight: 600; }
+      h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+      #stats { display: flex; gap: 18px; margin: 0; }
+      dt { font-size: 11px; color: var(--muted); }
+      dd { margin: 0; font-size: 15px; }
+      .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      button {
+        background: var(--bg); color: var(--text); border: 1px solid var(--stroke);
+        padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+      }
+      button.primary { border-color: var(--accent); color: var(--accent); }
+      .workspace { display: grid; grid-template-columns: 1fr 340px; min-height: 0; flex: 1; }
+      .backbone { padding: 16px 20px; overflow: auto; }
+      .note { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+      .ok { color: var(--ok); }
+      a { color: var(--accent); }
+      .arch {
+        display: grid; grid-template-columns: 1fr 72px 1fr; gap: 8px 10px;
+        align-items: stretch;
+      }
+      .col { background: var(--panel); border: 1px solid var(--stroke); padding: 10px 10px 14px; min-height: 180px; }
+      .col.power, .col.aux { min-height: 120px; }
+      .trunk {
+        height: 4px; margin: 8px 4px 14px; border-radius: 2px; position: relative;
+        box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
+      }
+      .trunk.nav { background: var(--nav); }
+      .trunk.prop { background: var(--prop); }
+      .trunk.power { background: var(--power); }
+      .trunk.aux { background: var(--aux); }
+      .trunk.pulse { animation: trunkpulse 0.4s ease; }
+      .drops { display: flex; flex-wrap: wrap; gap: 8px; }
+      .node {
+        border: 1px solid var(--stroke); background: var(--bg); padding: 6px 8px;
+        min-width: 88px; font-size: 12px; position: relative;
+      }
+      .node b { display: block; font-weight: 600; }
+      .node span { color: var(--muted); font-size: 10px; }
+      .node.silent, .node.off { opacity: 0.4; }
+      .node.tx { animation: flash 0.45s ease; }
+      .node.attack.tx, .node.spoof.tx, .node.read.tx, .node.write.tx, .node.flood.tx {
+        animation: flashbad 0.45s ease;
+      }
+      .gw {
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        text-align: center; font-size: 10px; color: var(--muted); letter-spacing: 0.04em;
+        text-transform: uppercase; border: 1px dashed var(--stroke); padding: 8px;
+      }
+      .gw strong { color: var(--text); font-size: 11px; letter-spacing: 0; text-transform: none; margin: 4px 0; }
+      .tap {
+        margin-top: 10px; font-size: 11px; color: var(--accent); border: 1px solid var(--accent);
+        display: inline-block; padding: 3px 8px;
+      }
+      .bus-log {
+        border-left: 1px solid var(--stroke); background: var(--panel);
+        display: flex; flex-direction: column; min-height: 0;
+      }
+      .bus-log h2 { padding: 12px 14px 0; }
+      #log { list-style: none; margin: 0; padding: 8px 0 16px; overflow: auto; flex: 1; }
+      #log li {
+        padding: 8px 14px; border-bottom: 1px solid var(--stroke); font-size: 12px;
+        animation: slide 0.2s ease;
+      }
+      #log li.attack, #log li.spoofed, #log li.spoof, #log li.gyro, #log li.velocity, #log li.read, #log li.write, #log li.flood {
+        border-left: 3px solid var(--bad);
+      }
+      #log .meta { color: var(--muted); font-size: 10px; margin-bottom: 2px; }
+      #log .hex { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 10px; }
+      .row-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+      footer.bottom {
+        display: grid; grid-template-columns: 1.1fr 1fr; gap: 0;
+        border-top: 1px solid var(--stroke); background: var(--panel); flex-shrink: 0;
+      }
+      .box { padding: 12px 16px 16px; }
+      .box + .box { border-left: 1px solid var(--stroke); }
+      .toggles { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+      .switch {
+        display: flex; align-items: center; gap: 8px; font-size: 12px;
+        border: 1px solid var(--stroke); padding: 6px 10px; background: var(--bg); cursor: pointer;
+      }
+      .switch input { accent-color: var(--ok); width: 16px; height: 16px; }
+      .switch.attack input { accent-color: var(--bad); }
+      .switch small { color: var(--muted); font-size: 10px; }
+      @keyframes flash {
+        0% { background: #1c3a28; border-color: var(--ok); box-shadow: 0 0 14px #3caf7a88; }
+        100% { background: var(--bg); border-color: var(--stroke); box-shadow: none; }
+      }
+      @keyframes flashbad {
+        0% { background: #3a1c1c; border-color: var(--bad); box-shadow: 0 0 14px #d45b4c88; }
+        100% { background: var(--bg); border-color: var(--stroke); box-shadow: none; }
+      }
+      @keyframes trunkpulse { 0% { filter: brightness(2.2); } 100% { filter: brightness(1); } }
+      @keyframes slide { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+      @media (max-width: 980px) {
+        .workspace { grid-template-columns: 1fr; }
+        .bus-log { min-height: 220px; }
+        footer.bottom { grid-template-columns: 1fr; }
+        .box + .box { border-left: 0; border-top: 1px solid var(--stroke); }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="kicker">Lab only · NMEA 2000 injector</p>
+        <h1>OPV simulator</h1>
+      </div>
+      <dl id="stats"></dl>
+      <div class="controls">
+        <button type="button" class="primary" id="run">Start</button>
+      </div>
+    </header>
+    <div class="workspace">
+      <div class="backbone">
+        <p class="note" id="note"></p>
+        <div class="arch">
+          <section class="col nav">
+            <h2>nav backbone</h2>
+            <div class="trunk nav" data-seg="nav"></div>
+            <div class="drops">
+              <div class="node" data-sa="16"><b>GNSS-1</b><span>SA 16 · 129025</span></div>
+              <div class="node" data-sa="17"><b>GNSS-2</b><span>SA 17 · 129025</span></div>
+              <div class="node" data-sa="35"><b>gyro</b><span>SA 35 · 127250</span></div>
+              <div class="node silent" data-sa="24"><b>AIS</b><span>SA 24</span></div>
+              <div class="node silent" data-sa="56"><b>autopilot</b><span>SA 56</span></div>
+              <div class="node silent" data-sa="52"><b>rudder</b><span>SA 52</span></div>
+              <div class="node silent" data-sa="60"><b>MFD</b><span>SA 60 · consumer</span></div>
+              <div class="node silent" data-sa="99"><b>decoy</b><span>SA 99 · honeypot</span></div>
+              <div class="node silent" data-sa="44"><b>rogue</b><span>SA 44 · injector</span></div>
+            </div>
+            <div class="tap">listen-only TAP → ot-sensor</div>
+          </section>
+          <div class="gw">isolating<br>gateway<strong>nav → prop</strong>HDG · COG/SOG<br>prop → nav DENY</div>
+          <section class="col prop">
+            <h2>propulsion backbone</h2>
+            <div class="trunk prop" data-seg="propulsion"></div>
+            <div class="drops">
+              <div class="node" data-sa="0"><b>engine-port</b><span>SA 0 · 127488</span></div>
+              <div class="node" data-sa="1"><b>engine-stbd</b><span>SA 1 · 127488</span></div>
+              <div class="node silent" data-sa="12"><b>thruster</b><span>SA 12</span></div>
+            </div>
+          </section>
+        </div>
+        <div class="row-bottom">
+          <section class="col power">
+            <h2>power backbone</h2>
+            <div class="trunk power" data-seg="power"></div>
+            <div class="drops">
+              <div class="node silent" data-sa="20"><b>genset-1</b><span>SA 20</span></div>
+            </div>
+          </section>
+          <section class="col aux">
+            <h2>aux backbone</h2>
+            <div class="trunk aux" data-seg="aux"></div>
+            <div class="drops">
+              <div class="node silent"><b>tanks / env</b><span>no twins this lab</span></div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <aside class="bus-log">
+        <h2>Emitted messages</h2>
+        <ol id="log"></ol>
+      </aside>
+    </div>
+    <footer class="bottom">
+      <section class="box" id="attacks">
+        <h2>Attacks</h2>
+        <div class="toggles">
+          <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="gyro" /> Gyro spoof <small>T1692.002 · 127250</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="velocity" /> Velocity spoof <small>T1692.002 · 129026 SOG</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="read" /> Read <small>ISO Request 59904</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="write" /> Write <small>heading control 127237</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="read_flood" /> Read flood <small>ISO Request burst</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="write_flood" /> Write flood <small>127237 burst</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="pgn_flood" /> PGN flood <small>heading burst</small></label>
+        </div>
+      </section>
+      <section class="box" id="devices">
+        <h2>Devices</h2>
+        <div class="toggles" id="device-toggles"></div>
+      </section>
+    </footer>
+    <section class="ownship" aria-label="Own ship">
+      <div class="ownship-globe">
+        <svg id="own-globe" viewBox="0 0 132 132" aria-label="Globe"></svg>
+      </div>
+      <div class="ownship-readout">
+        <div>
+          <h2>Own ship</h2>
+          <dl id="own-stats">
+            <div><dt>Latitude</dt><dd>—</dd></div>
+            <div><dt>Longitude</dt><dd>—</dd></div>
+            <div><dt>Velocity</dt><dd>—</dd></div>
+            <div><dt>Gyro heading</dt><dd>—</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+    <script>
+      const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      let lastTicks = -1;
+      let playId = 0;
+
+      function fmtLat(v) {
+        if (v == null || Number.isNaN(v)) return "—";
+        return `${Math.abs(v).toFixed(6)}° ${v >= 0 ? "N" : "S"}`;
+      }
+      function fmtLon(v) {
+        if (v == null || Number.isNaN(v)) return "—";
+        return `${Math.abs(v).toFixed(6)}° ${v >= 0 ? "E" : "W"}`;
+      }
+      function compass(deg) {
+        if (deg == null || Number.isNaN(deg)) return "—";
+        const names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+        const i = Math.round((((deg % 360) + 360) % 360) / 22.5) % 16;
+        return `${deg.toFixed(1)}° ${names[i]}`;
+      }
+      function shipIcon() {
+        return `<g class="hull">
+          <path d="M0,-16 L5,-6 L5.5,11 L3,15 L-3,15 L-5.5,11 L-5,-6 Z" fill="#d7e2ee" stroke="#3d8bfd" stroke-width="1.1"/>
+          <path d="M-2.2,-4 h4.4 v8 h-4.4 z" fill="#1b2836"/>
+          <path d="M-1.4,-9 h2.8 v4 h-2.8 z" fill="#3d8bfd"/>
+        </g>`;
+      }
+      function ortho(lat, lon, lat0, lon0) {
+        const φ = (lat * Math.PI) / 180, λ = (lon * Math.PI) / 180;
+        const φ0 = (lat0 * Math.PI) / 180, λ0 = (lon0 * Math.PI) / 180;
+        const cosc = Math.sin(φ0) * Math.sin(φ) + Math.cos(φ0) * Math.cos(φ) * Math.cos(λ - λ0);
+        if (cosc < 0) return null;
+        return {
+          x: Math.cos(φ) * Math.sin(λ - λ0),
+          y: Math.cos(φ0) * Math.sin(φ) - Math.sin(φ0) * Math.cos(φ) * Math.cos(λ - λ0),
+        };
+      }
+      function globeMarkup(lat, lon, gyro, size) {
+        const cx = size / 2, cy = size / 2, r = size * 0.42;
+        const hdg = gyro ?? 90;
+        const rad = (hdg * Math.PI) / 180;
+        // Slight opposite yaw: globe turns against ship / gyro direction.
+        const viewLat = (lat ?? 54.5) - 7 * Math.cos(rad);
+        const viewLon = (lon ?? 18.7) - 11 * Math.sin(rad);
+        const yaw = -hdg * 0.12;
+        const lines = [];
+        for (let mer = -180; mer < 180; mer += 30) {
+          const pts = [];
+          for (let φ = -80; φ <= 80; φ += 6) {
+            const p = ortho(φ, mer, viewLat, viewLon);
+            if (p) pts.push(`${cx + p.x * r},${cy - p.y * r}`);
+            else if (pts.length) {
+              lines.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="#4d6a88" stroke-width="0.8"/>`);
+              pts.length = 0;
+            }
+          }
+          if (pts.length) lines.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="#4d6a88" stroke-width="0.8"/>`);
+        }
+        for (const par of [-60, -30, 0, 30, 60]) {
+          const pts = [];
+          for (let λ = -180; λ <= 180; λ += 6) {
+            const p = ortho(par, λ, viewLat, viewLon);
+            if (p) pts.push(`${cx + p.x * r},${cy - p.y * r}`);
+            else if (pts.length) {
+              lines.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="#3a536c" stroke-width="${par === 0 ? 1.1 : 0.7}"/>`);
+              pts.length = 0;
+            }
+          }
+          if (pts.length) lines.push(`<polyline points="${pts.join(" ")}" fill="none" stroke="#3a536c" stroke-width="${par === 0 ? 1.1 : 0.7}"/>`);
+        }
+        const pin = lat != null && lon != null ? ortho(lat, lon, viewLat, viewLon) : { x: 0, y: 0 };
+        const px0 = cx + (pin ? pin.x * r : 0);
+        const py0 = cy - (pin ? pin.y * r : 0);
+        const yawRad = (yaw * Math.PI) / 180;
+        const dx = px0 - cx, dy = py0 - cy;
+        const px = cx + dx * Math.cos(yawRad) - dy * Math.sin(yawRad);
+        const py = cy + dx * Math.sin(yawRad) + dy * Math.cos(yawRad);
+        return `
+          <defs>
+            <radialGradient id="own-fill" cx="38%" cy="32%">
+              <stop offset="0%" stop-color="#1d4a6e"/>
+              <stop offset="70%" stop-color="#0d2438"/>
+              <stop offset="100%" stop-color="#08141e"/>
+            </radialGradient>
+            <clipPath id="own-clip"><circle cx="${cx}" cy="${cy}" r="${r}"/></clipPath>
+          </defs>
+          <g transform="rotate(${yaw.toFixed(2)} ${cx} ${cy})">
+            <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#own-fill)" stroke="#6ea0c8" stroke-width="1.5"/>
+            <g clip-path="url(#own-clip)">${lines.join("")}</g>
+            <ellipse cx="${cx - r * 0.22}" cy="${cy - r * 0.28}" rx="${r * 0.38}" ry="${r * 0.22}" fill="#9ec9e8" opacity="0.12"/>
+          </g>
+          <g transform="translate(${px},${py}) rotate(${hdg})">${shipIcon()}</g>
+        `;
+      }
+      function renderMotion(s) {
+        const o = s.ownship || s.plant || {};
+        const p = s.plant || {};
+        const attacks = s.attacks || {};
+        const gyro = o.heading_deg;
+        const sogKn = o.sog_kn;
+        const sogMs = o.sog_ms != null ? o.sog_ms : (sogKn != null ? sogKn * 0.514444 : null);
+        ownLive = {
+          lat: o.lat_deg, lon: o.lon_deg, gyro, sogKn, sogMs,
+          moveSog: p.sog_kn != null ? p.sog_kn : sogKn,
+          moveHdg: p.heading_deg != null ? p.heading_deg : gyro,
+          wall: performance.now(), attacks,
+        };
+        paintOwn(o.lat_deg, o.lon_deg, gyro, sogKn, sogMs, attacks, true);
+      }
+      let ownLive = null;
+      let lastGlobeAt = 0;
+      function destOffset(lat, lon, heading, distM) {
+        const rad = ((heading ?? 90) * Math.PI) / 180;
+        const dLat = (distM * Math.cos(rad)) / 111320;
+        const cos = Math.cos(((lat ?? 0) * Math.PI) / 180);
+        const dLon = (distM * Math.sin(rad)) / (111320 * Math.max(0.2, Math.abs(cos)));
+        return { lat: lat + dLat, lon: lon + dLon };
+      }
+      function paintOwn(lat, lon, gyro, sogKn, sogMs, attacks, forceGlobe) {
+        const globe = document.getElementById("own-globe");
+        const stats = document.getElementById("own-stats");
+        const vel = sogKn != null
+          ? `${sogKn.toFixed(2)} kn${sogMs != null ? ` · ${sogMs.toFixed(2)} m/s` : ""}`
+          : "—";
+        const hot = (key) => (attacks && attacks[key] ? "hot" : "");
+        if (stats) stats.innerHTML = `
+          <div class="${hot("spoof")}"><dt>Latitude</dt><dd>${esc(fmtLat(lat))}</dd></div>
+          <div class="${hot("spoof")}"><dt>Longitude</dt><dd>${esc(fmtLon(lon))}</dd></div>
+          <div class="${hot("velocity")}"><dt>Velocity</dt><dd>${esc(vel)}</dd></div>
+          <div class="${hot("gyro")}"><dt>Gyro heading</dt><dd>${esc(compass(gyro))}</dd></div>`;
+        const now = performance.now();
+        if (globe && (forceGlobe || now - lastGlobeAt > 120)) {
+          lastGlobeAt = now;
+          globe.innerHTML = globeMarkup(lat, lon, gyro, 132);
+        }
+      }
+      function animOwn(now) {
+        requestAnimationFrame(animOwn);
+        if (!ownLive || ownLive.lat == null) return;
+        const dt = (now - ownLive.wall) / 1000;
+        const dist = (ownLive.moveSog || 0) * 0.514444 * Math.max(0, dt);
+        const p = destOffset(ownLive.lat, ownLive.lon, ownLive.moveHdg, dist);
+        paintOwn(p.lat, p.lon, ownLive.gyro, ownLive.sogKn, ownLive.sogMs, ownLive.attacks, false);
+      }
+      requestAnimationFrame(animOwn);
+
+      async function snap() {
+        const r = await fetch("/api/snapshot");
+        if (!r.ok) throw new Error("snapshot " + r.status);
+        return r.json();
+      }
+      async function control(action, extra) {
+        const r = await fetch("/api/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, ...(extra || {}) }),
+        });
+        if (!r.ok) throw new Error("control " + r.status);
+        return (await r.json()).snapshot;
+      }
+      function ensureDevices(s) {
+        const box = document.getElementById("device-toggles");
+        if (box.dataset.ready) return;
+        const catalog = s.device_catalog || [];
+        box.innerHTML = catalog.map((d) =>
+          `<label class="switch"><input type="checkbox" data-device="${esc(d.sa)}" ${d.enabled ? "checked" : ""}/> ${esc(d.name)} <small>SA ${esc(d.sa)} · ${esc(d.segment)}</small></label>`
+        ).join("");
+        box.dataset.ready = "1";
+      }
+      function syncToggles(s) {
+        const attacks = s.attacks || {};
+        document.querySelectorAll("[data-attack]").forEach((el) => {
+          if (document.activeElement === el) return;
+          el.checked = !!attacks[el.getAttribute("data-attack")];
+        });
+        const devices = s.devices || {};
+        document.querySelectorAll("[data-device]").forEach((el) => {
+          if (document.activeElement === el) return;
+          el.checked = devices[el.getAttribute("data-device")] !== false;
+        });
+        document.querySelectorAll(".node[data-sa]").forEach((n) => {
+          const sa = n.getAttribute("data-sa");
+          if (sa === "44") {
+            const on = Object.entries(attacks).some(([k, v]) => v && k !== "spoof" && k !== "gyro" && k !== "velocity");
+            n.classList.toggle("silent", !on);
+            n.classList.toggle("off", !on);
+            return;
+          }
+          const on = devices[sa] !== false && devices[sa] !== undefined ? devices[sa] : !n.classList.contains("silent");
+          n.classList.toggle("off", devices[sa] === false);
+          n.classList.toggle("silent", devices[sa] === false);
+        });
+      }
+      function renderStats(s) {
+        const p = s.plant || {};
+        const active = Object.entries(s.attacks || {}).filter(([, v]) => v).map(([k]) => k);
+        document.getElementById("stats").innerHTML = `
+          <div><dt>Mode</dt><dd>${esc(s.sim_mode)}</dd></div>
+          <div><dt>Phase</dt><dd>${esc(p.phase || "idle")}</dd></div>
+          <div><dt>Attack</dt><dd>${esc(active.join(", ") || "off")}</dd></div>
+          <div><dt>SOG</dt><dd>${p.sog_kn != null ? p.sog_kn.toFixed(1) + " kn" : "—"}</dd></div>
+          <div><dt>Frames</dt><dd>${s.frames_this_tick}</dd></div>`;
+        document.getElementById("run").textContent = s.running ? "Pause" : "Start";
+        ensureDevices(s);
+        syncToggles(s);
+        const names = active.length ? active.join(", ") : "none";
+        document.getElementById("note").innerHTML = s.running
+          ? `<span class="ok">Plant ticking.</span> Attacks: ${esc(names)}. Toggle devices to put twins on or off the bus.`
+          : "Plant paused. Frames stop; the sensor TAP goes idle.";
+      }
+      function flash(sa, kind) {
+        const el = document.querySelector('.node[data-sa="' + sa + '"]');
+        if (!el) return;
+        el.classList.remove("tx", "spoof", "gyro", "velocity", "read", "write", "flood", "attack");
+        void el.offsetWidth;
+        if (kind && kind !== "ok") el.classList.add("attack");
+        el.classList.add("tx");
+        const seg = el.closest(".col")?.querySelector(".trunk");
+        if (seg) {
+          seg.classList.remove("pulse");
+          void seg.offsetWidth;
+          seg.classList.add("pulse");
+        }
+      }
+      const ATTACK_TAG = { spoof: " · SPOOF", spoofed: " · SPOOF", gyro: " · GYRO", velocity: " · SOG", read: " · READ", write: " · WRITE", flood: " · FLOOD" };
+      function prependLog(m) {
+        const log = document.getElementById("log");
+        const li = document.createElement("li");
+        const kind = m.kind || (m.spoofed ? "spoof" : "ok");
+        if (kind !== "ok" || m.spoofed) li.className = "attack";
+        if (m.spoofed) li.classList.add("spoofed");
+        const tag = ATTACK_TAG[kind] || (m.spoofed ? " · SPOOF" : "");
+        li.innerHTML = `<div class="meta">${esc(m.segment)} · SA ${esc(m.sa)} ${esc(m.name)}${tag}</div>
+          <div><strong>PGN ${esc(m.pgn)}</strong> ${esc(m.pgn_name)}</div>
+          <div>${esc(m.summary)}</div>
+          <div class="hex">${esc(m.hex)}</div>`;
+        log.prepend(li);
+        while (log.children.length > 80) log.removeChild(log.lastChild);
+      }
+      function playEmissions(s) {
+        if (s.ticks === lastTicks) return;
+        lastTicks = s.ticks;
+        const token = ++playId;
+        const msgs = s.emissions || [];
+        msgs.forEach((m, i) => {
+          setTimeout(() => {
+            if (token !== playId) return;
+            flash(m.sa, m.kind || (m.spoofed ? "spoof" : "ok"));
+            prependLog(m);
+          }, i * 40);
+        });
+      }
+      function apply(s) {
+        renderStats(s);
+        renderMotion(s);
+        playEmissions(s);
+      }
+      document.getElementById("run").onclick = async () => {
+        const s = await snap();
+        apply(await control(s.running ? "pause" : "start"));
+      };
+      document.getElementById("attacks").addEventListener("change", async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLInputElement) || !t.hasAttribute("data-attack")) return;
+        apply(await control("toggle_attack", { attack: t.getAttribute("data-attack"), enabled: t.checked }));
+      });
+      document.getElementById("device-toggles").addEventListener("change", async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLInputElement) || !t.hasAttribute("data-device")) return;
+        apply(await control("toggle_device", { device: t.getAttribute("data-device"), enabled: t.checked }));
+      });
+      async function pull() {
+        try { apply(await snap()); } catch (e) { document.getElementById("note").textContent = e.message; }
+      }
+      pull();
+      setInterval(pull, 400);
+    </script>
+  </body>
+</html>

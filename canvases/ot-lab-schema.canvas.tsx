@@ -1,5 +1,8 @@
 import {
   Callout,
+  Card,
+  CardBody,
+  CardHeader,
   Code,
   Divider,
   Grid,
@@ -19,7 +22,7 @@ import {
 
 type SystemId = "sim" | "sensor";
 type Mode = "dev" | "prod";
-type View = "services" | "network";
+type View = "services" | "network" | "workflows";
 type Field = [string, string, string];
 
 type Service = {
@@ -27,7 +30,7 @@ type Service = {
   system: SystemId;
   label: string;
   summary: string;
-  image: string;
+  module: string;
   port: string;
   proto: string;
   consumes: string;
@@ -35,19 +38,27 @@ type Service = {
   inFields: Field[];
   outFields: Field[];
   hideInProd?: boolean;
-  prodDown?: boolean;
+  specOnly?: boolean;
 };
 
 const OTEVENT: Field[] = [
   ["event_id", "str", "Stable id copied to scores and evidence"],
   ["timestamp", "datetime", "Event time"],
-  ["protocol", "str", "nmea2000 | modbus | nmea0183"],
-  ["source_asset_id", "str | None", "Talker / client"],
+  ["protocol", "str", "nmea2000 (live TAP); adapters also map modbus / nmea0183"],
+  ["source_asset_id", "str | None", "Talker SA"],
   ["destination_asset_id", "str | None", "Unicast DA; None if broadcast"],
   ["operation_name", "str", "gnss_position, address_claim, …"],
-  ["object_address", "str | None", "PGN / register / sentence"],
+  ["object_address", "str | None", "PGN"],
   ["is_write / is_control / privileged", "bool", "Observed flags; sensor still listen-only"],
   ["parser_fields", "dict", "Canonical fields, source, segment, catalog"],
+];
+
+const CAN_FRAME: Field[] = [
+  ["t", "datetime", "Plant clock"],
+  ["segment", "str", "nav | propulsion | power | aux"],
+  ["can_id", "int", "29-bit NMEA 2000"],
+  ["data_hex", "str", "Payload hex; Fast Packet assembled in the adapter"],
+  ["error", "bool", "Error frame"],
 ];
 
 const SERVICES: Service[] = [
@@ -55,52 +66,47 @@ const SERVICES: Service[] = [
     id: "scenario",
     system: "sim",
     label: "Scenario engine",
-    summary: "Physics and underway kinematics. Drives N2K twins. Not on the vessel.",
-    image: "learnplay/opv-sim:scenario",
-    port: "9100/tcp",
-    proto: "HTTP control",
-    consumes: "scenario.yaml",
+    summary: "Underway kinematics. Drives N2K twins. Lab only.",
+    module: "opv_sim.ScenarioEngine",
+    port: "in-process",
+    proto: "tick",
+    consumes: "scenario_id, SIM_MODE",
     emits: "PlantState",
     inFields: [
-      ["scenario_id", "str", "underway, gps-spoof-underway, …"],
+      ["scenario_id", "str", "underway | gps-spoof-underway"],
       ["sim_mode", "str", "dev | prod"],
     ],
     outFields: [
       ["t", "datetime", "Scenario clock"],
       ["lat_deg / lon_deg / sog_kn / heading_deg", "float", "Nav plant"],
       ["rpm_port / rpm_stbd", "float", "Propulsion plant"],
-      ["attack_id", "str | None", "dev only; never on CAN"],
+      ["phase", "str", "baseline | ramp | hold | recover"],
     ],
   },
   {
     id: "twins",
     system: "sim",
     label: "Device twins",
-    summary: "ISO 11783 NAME + SA publishers on four Mini N2K trunks.",
-    image: "learnplay/opv-sim:twins",
-    port: "vcan_*",
-    proto: "SocketCAN",
-    consumes: "PlantState",
+    summary: "ISO 11783 NAME + SA publishers. Frames stay in-memory in this tree.",
+    module: "opv_sim.twins.DeviceTwins",
+    port: "InMemoryCanBus",
+    proto: "CAN",
+    consumes: "PlantState + overlay",
     emits: "CanFrame",
     inFields: [
-      ["plant", "PlantState", "Kinematics for N2K twins"],
-      ["overlay", "dict | None", "From injector"],
+      ["plant", "PlantState", "Kinematics"],
+      ["attacks", "dict", "spoof, gyro, velocity, pgn_flood, …"],
     ],
-    outFields: [
-      ["iface", "str", "vcan_nav | vcan_prop | vcan_pwr | vcan_aux"],
-      ["can_id", "int", "29-bit"],
-      ["pgn / sa / da", "int", "Unpacked ID"],
-      ["payload", "bytes", "8-byte or Fast Packet"],
-    ],
+    outFields: CAN_FRAME,
   },
   {
     id: "gateways",
     system: "sim",
     label: "Isolating gateways",
-    summary: "Allowlisted cross-segment forwarding. Engine commands never on nav.",
-    image: "learnplay/opv-sim:gw",
-    port: "vcan_*",
-    proto: "SocketCAN",
+    summary: "Allowlisted cross-segment forward. Engine commands never onto nav.",
+    module: "opv_sim.twins.IsolatingGateway",
+    port: "in-process",
+    proto: "CAN filter",
     consumes: "CanFrame",
     emits: "CanFrame (allowlist)",
     inFields: [["frame", "CanFrame", "From a trunk"]],
@@ -113,34 +119,54 @@ const SERVICES: Service[] = [
     id: "injector",
     system: "sim",
     label: "Attack injector",
-    summary: "Overlays false PGNs. Labels stay off-bus.",
-    image: "learnplay/opv-sim:injector",
-    port: "9101/tcp",
-    proto: "HTTP",
-    consumes: "scenario + PlantState",
-    emits: "overlay + LabelRecord",
+    summary: "Overlays false PGNs. Labels stay off-bus. UI on :8444 only — never on the sensor dashboard.",
+    module: "opv_sim.twins.AttackInjector",
+    port: "127.0.0.1:8444",
+    proto: "HTTP + overlay",
+    consumes: "POST /api/control",
+    emits: "overlay + LabelRecord (dev)",
     inFields: [
-      ["scenario_id", "str", "Which overlay"],
-      ["sim_mode", "str", "prod = no label publisher"],
+      ["action", "str", "toggle_attack | reset | start | pause"],
+      ["attack", "str", "spoof | gyro | velocity | pgn_flood | …"],
+      ["enabled", "bool", "Arm or clear that overlay"],
     ],
     outFields: [
-      ["victim_sa / pgn / segment", "…", "On-bus lie"],
-      ["label", "LabelRecord", "dev NATS only"],
+      ["attacks", "dict[str, bool]", "Live injector map"],
+      ["attack_id", "str | None", "gps-spoof-primary when spoof is on"],
+      ["label", "LabelRecord", "dev only; never on CAN"],
+    ],
+  },
+  {
+    id: "tapapi",
+    system: "sim",
+    label: "TAP API",
+    summary: "Listen-only HTTP snapshot of the last plant tick. Sensor polls this; it never writes the bus.",
+    module: "opv_sim.app GET /api/tap",
+    port: "127.0.0.1:8444",
+    proto: "HTTP JSON",
+    consumes: "SimRuntime.tick",
+    emits: "TapSnapshot",
+    inFields: [["elapsed_s", "float", "Plant time"]],
+    outFields: [
+      ["frames[]", "list[CanFrame]", "Last hop; data_hex only"],
+      ["plant", "PlantState", "Kinematics for the injector UI"],
+      ["attacks", "dict", "Which overlays are armed"],
+      ["attack_id", "str | None", "Present on the sim; sensor TAP path must not use it as GT"],
     ],
   },
   {
     id: "labels",
     system: "sim",
     label: "Label topic",
-    summary: "dev-only parallel NATS. Fatal if bound in SIM_MODE=prod.",
-    image: "nats:2.10.22",
-    port: "4223/tcp",
-    proto: "NATS",
+    summary: "dev-only in-memory records. Fatal if LABEL_TOPIC is set in SIM_MODE=prod.",
+    module: "opv_sim.LabelTopic",
+    port: "in-memory",
+    proto: "eval only",
     consumes: "LabelRecord",
     emits: "LabelRecord",
     hideInProd: true,
     inFields: [
-      ["attack_id", "str", "gps-spoof-underway, …"],
+      ["attack_id", "str", "gps-spoof-primary, …"],
       ["technique", "str", "T1692.002"],
     ],
     outFields: [
@@ -149,93 +175,41 @@ const SERVICES: Service[] = [
     ],
   },
   {
-    id: "cms",
-    system: "sim",
-    label: "CMS stub",
-    summary: "Read-only nav export. CMS does not sit on N2K.",
-    image: "learnplay/opv-sim:cms-stub",
-    port: "9180/tcp",
-    proto: "HTTP",
-    consumes: "gateway allowlist",
-    emits: "NavExport",
-    inFields: [["pgns", "list", "position, COG/SOG, heading"]],
-    outFields: [["json", "NavExport", "lat, lon, cog, heading"]],
+    id: "tap",
+    system: "sensor",
+    label: "TAP client",
+    summary: "Polls the simulator. Listen-only. Dashboard does not tick the plant.",
+    module: "ot_sensor.tap.TapMirror",
+    port: "GET {sim}/api/tap",
+    proto: "HTTP JSON",
+    consumes: "TapSnapshot",
+    emits: "CanFrame",
+    inFields: CAN_FRAME,
+    outFields: CAN_FRAME,
   },
   {
     id: "n2k",
     system: "sensor",
     label: "N2K adapter",
-    summary: "Listen-only TAP. Four ifaces. Maps CAN/PGN onto OTEvent.",
-    image: "learnplay/ot-sensor:n2k",
-    port: "vcan_* / can0–3",
-    proto: "SocketCAN",
+    summary: "Maps CAN/PGN onto OTEvent. Writes on the wire are observed flags, never transmitted.",
+    module: "ot_sensor.adapters.Nmea2000Adapter",
+    port: "in-process",
+    proto: "NMEA 2000",
     consumes: "CanFrame",
     emits: "OTEvent",
-    inFields: [
-      ["iface", "str", "vcan_nav or ship TAP"],
-      ["catalog", "str", "pgn-2026.03.json"],
-    ],
+    inFields: CAN_FRAME,
     outFields: OTEVENT,
-  },
-  {
-    id: "modbus",
-    system: "sensor",
-    label: "Modbus adapter",
-    summary: "Read-only poll. FC 01–04. Client to the sim/PLC.",
-    image: "learnplay/ot-sensor:modbus",
-    port: "→ 1502/tcp",
-    proto: "Modbus TCP",
-    consumes: "Modbus PDU",
-    emits: "OTEvent",
-    inFields: [
-      ["host:port", "str", "127.0.0.1:1502"],
-      ["unit_id", "int", "1"],
-      ["writes", "bool", "fatal if true in prod"],
-    ],
-    outFields: OTEVENT,
-  },
-  {
-    id: "n0183",
-    system: "sensor",
-    label: "NMEA 0183 adapter",
-    summary: "Example third protocol. UDP bind.",
-    image: "learnplay/ot-sensor:n0183",
-    port: "10110/udp",
-    proto: "NMEA 0183",
-    consumes: "NmeaSentence",
-    emits: "OTEvent",
-    inFields: [
-      ["bind", "str", "0.0.0.0:10110"],
-      ["map", "str", "nmea0183-nav.yaml"],
-    ],
-    outFields: OTEVENT,
-  },
-  {
-    id: "ingest",
-    system: "sensor",
-    label: "Ingest bus",
-    summary: "NATS JetStream. Only contract downstream services need.",
-    image: "nats:2.10.22",
-    port: "4222/tcp",
-    proto: "NATS",
-    consumes: "OTEvent",
-    emits: "OTEvent (otevent.>)",
-    inFields: OTEVENT,
-    outFields: [
-      ["subject", "str", "otevent.{source}.{segment}"],
-      ["payload", "OTEvent", "Unchanged"],
-    ],
   },
   {
     id: "honeypot",
     system: "sensor",
     label: "Honeypot",
-    summary: "Raw inflow regardless of parse. Rotate 128 MiB/1 h; retain 2 GiB and 30 d per segment. Not LLM input.",
-    image: "learnplay/ot-sensor:honeypot",
-    port: "9201/tcp",
-    proto: "HTTP metrics",
+    summary: "Raw inflow regardless of parse. Rotate + retain. Not LLM input.",
+    module: "ot_sensor.honeypot.HoneypotService",
+    port: "otlab-work/hp",
+    proto: "JSONL",
     consumes: "raw bytes + optional OTEvent",
-    emits: "HoneypotRecord / HoneypotFile",
+    emits: "HoneypotRecord / feed",
     inFields: [
       ["payload", "bytes", "Uninterpreted"],
       ["iface / segment", "str", "Capture path"],
@@ -243,38 +217,37 @@ const SERVICES: Service[] = [
     outFields: [
       ["seq / sha256 / nbytes", "…", "Envelope"],
       ["path", "str", "hp-…-rNNNN.jsonl.gz"],
-      ["on_hold / purged", "bool", "Incident hold; unlinked after retain cap"],
-      ["dropped_records", "int", "Counted if cap hit and all files held"],
+      ["feed[]", "list", "Dashboard Honeypot tab"],
     ],
   },
   {
     id: "assets",
     system: "sensor",
     label: "Asset detector",
-    summary: "Live catalog + criticality + depends_on. Diffs the OPV model.",
-    image: "learnplay/ot-sensor:assets",
-    port: "9202/tcp",
-    proto: "HTTP",
+    summary: "Live TAP talkers joined to the vessel YAML. Silent catalog assets stay hidden.",
+    module: "ot_sensor.assets.AssetDetector",
+    port: "in-process",
+    proto: "OTEvent",
     consumes: "OTEvent",
     emits: "AssetRecord / AssetChange",
     inFields: [
       ["source_asset_id", "str", "From OTEvent"],
-      ["criticality.yaml", "file", "Join, not inferred"],
+      ["asset-criticality.yaml", "file", "Join, not inferred"],
     ],
     outFields: [
       ["asset_id / criticality / nis2_service", "…", "Inventory row"],
       ["depends_on / dependents", "list[str]", "Blast radius"],
-      ["change", "str", "new_asset, critical_missing, …"],
+      ["traffic", "str", "benign | attack | idle"],
     ],
   },
   {
     id: "graph",
     system: "sensor",
     label: "Comms graph",
-    summary: "Who talks to whom. Distinct from the dependency graph.",
-    image: "learnplay/ot-sensor:graph",
-    port: "9203/tcp",
-    proto: "HTTP",
+    summary: "Who talks to whom. Distinct from the dependency overlay.",
+    module: "ot_sensor.graph.CommsGraph",
+    port: "in-process",
+    proto: "OTEvent",
     consumes: "OTEvent + AssetRecord + VesselModel",
     emits: "GraphEdge / GraphChange",
     inFields: [
@@ -289,18 +262,18 @@ const SERVICES: Service[] = [
   {
     id: "bytewax",
     system: "sensor",
-    label: "Bytewax",
-    summary: "Windows, residuals, event_id. Dual clocks. Drops nothing silently.",
-    image: "learnplay/ot-sensor:bytewax",
-    port: "9204/tcp",
-    proto: "NATS + HTTP",
+    label: "Feature stage",
+    summary: "Bytewax contract in-process (FeatureWindow + event_id). A later worker can replace this stage.",
+    module: "ot_sensor.features.FeatureStage",
+    port: "in-process",
+    proto: "windows",
     consumes: "OTEvent",
     emits: "FeatureWindow",
     inFields: OTEVENT.slice(0, 6),
     outFields: [
       ["event_id", "str", "Shared with ONNX and rules"],
       ["t_start / t_end", "datetime", "Window"],
-      ["features", "dict[str, float]", "Canonical residuals and rates"],
+      ["features", "dict[str, float]", "GNSS split, DR residual, rates"],
       ["member_event_ids", "list[str]", "Not the 10 Hz dump"],
     ],
   },
@@ -309,18 +282,18 @@ const SERVICES: Service[] = [
     system: "sensor",
     label: "ONNX enrich",
     summary: "Parallel to rules. Fail closed: model_unavailable.",
-    image: "learnplay/ot-sensor:onnx",
-    port: "9205/tcp",
-    proto: "NATS + HTTP",
+    module: "ot_sensor.onnx_enrich.OnnxEnrich",
+    port: "in-process",
+    proto: "ONNX Runtime",
     consumes: "FeatureWindow",
     emits: "ModelScore",
     inFields: [
       ["event_id", "str", "Same window"],
-      ["features", "dict", "Pinned by config.yaml"],
+      ["features", "dict", "Pinned by throughput-lstm config.yaml"],
     ],
     outFields: [
-      ["model_id / version", "str", "throughput-lstm, physics-ae, …"],
-      ["scores", "dict[str, float]", "flood_score, anomaly, …"],
+      ["model_id / version", "str", "throughput-lstm"],
+      ["scores", "dict[str, float]", "flood_score, …"],
       ["status", "str", "ok | model_unavailable"],
     ],
   },
@@ -328,10 +301,10 @@ const SERVICES: Service[] = [
     id: "rules",
     system: "sensor",
     label: "Rules enrich",
-    summary: "Parallel to ONNX. Same FeatureWindow.event_id.",
-    image: "learnplay/ot-sensor:rules",
-    port: "9206/tcp",
-    proto: "NATS + HTTP",
+    summary: "Parallel to ONNX. Same FeatureWindow.event_id. Operator can retune clauses on the dashboard.",
+    module: "ot_sensor.rules.RulesEnrich",
+    port: "POST /api/rules",
+    proto: "predicates",
     consumes: "FeatureWindow",
     emits: "RuleHit",
     inFields: [
@@ -339,22 +312,22 @@ const SERVICES: Service[] = [
       ["features", "dict", "gps-spoof-nav predicates"],
     ],
     outFields: [
-      ["rule_id", "str", "gps-spoof-nav, …"],
+      ["rule_id", "str", "gps-spoof-nav"],
       ["fired / severity", "bool / str", "If predicates hold"],
       ["techniques / impacts", "list[str]", "ATT&CK ICS"],
-      ["status", "str", "ok | rule_unavailable"],
+      ["clauses_fired", "list[str]", "Operator evidence"],
     ],
   },
   {
     id: "incidents",
     system: "sensor",
     label: "Incidents",
-    summary: "Join by event_id, correlate, risk score, NIS2 clocks. Not an LLM.",
-    image: "learnplay/ot-sensor:incidents",
-    port: "9207/tcp",
-    proto: "NATS + HTTP",
+    summary: "Join by event_id, correlate, risk, NIS2 clocks. Does not wait on the SLM.",
+    module: "ot_sensor.incidents.IncidentCorrelator",
+    port: "in-process",
+    proto: "correlation",
     consumes: "ModelScore, RuleHit, AssetChange, GraphChange",
-    emits: "Alert, Incident, Evidence, RiskScore, Nis2UiAlert",
+    emits: "Alert, Incident, Evidence, RiskScore",
     inFields: [
       ["event_id", "str", "Join key"],
       ["JOIN_TIMEOUT", "s", "join_incomplete; never invent scores"],
@@ -363,37 +336,58 @@ const SERVICES: Service[] = [
       ["incident_id / state / severity", "str", "open | update | closed"],
       ["risk.total / nis2_significant", "int / bool", "Transparent 0–100"],
       ["alerts[]", "list[Alert]", "Joined enrichers"],
-      ["evidence_summary", "dict", "SLM input; not raw CAN"],
+      ["evidence_summary", "dict", "SLM / CyberPal input; not raw CAN"],
     ],
   },
   {
     id: "slm",
     system: "sensor",
-    label: "Local SLM",
-    summary: "GGUF writes alert_title / alert_body. Does not fire detections. prod denies LLM_ENDPOINT.",
-    image: "learnplay/ot-sensor:slm",
-    port: "127.0.0.1:9208/tcp",
-    proto: "HTTP loopback",
+    label: "Watchstander SLM",
+    summary: "Writes alert_title / alert_body. Does not detect. Missing GGUF → llm_unavailable template. prod denies LLM_ENDPOINT.",
+    module: "ot_sensor.slm.LocalSlm",
+    port: "local GGUF",
+    proto: "llama.cpp",
     consumes: "Incident",
     emits: "CopilotAssessment",
     inFields: [
-      ["evidence_summary", "dict", "Only compact incident"],
+      ["evidence_summary", "dict", "Compact incident only"],
       ["allow_techniques", "list[str]", "Incident ∪ vendored ATT&CK"],
     ],
     outFields: [
       ["alert_title / alert_body", "str", "≤120 / ≤1200"],
       ["status", "str", "ok | llm_unavailable | schema_invalid"],
-      ["runtime", "str", "local"],
+      ["recommend", "list[str]", "Observe / distrust only"],
+    ],
+  },
+  {
+    id: "assistant",
+    system: "sensor",
+    label: "CyberPal assistant",
+    summary: "Investigation only. One session per incident. Correlation JSON — no raw CAN, honeypot blobs, or attack_id.",
+    module: "ot_sensor.assistant.CyberPalAssistant",
+    port: "/api/assistant + Ollama :11434",
+    proto: "HTTP chat",
+    consumes: "Incident + related assets",
+    emits: "AssistantSession",
+    inFields: [
+      ["incident_id", "str", "Session key"],
+      ["briefing", "dict", "Fired rules/models, graph, risk, NIS2, assets"],
+      ["message", "str | None", "Investigation question"],
+    ],
+    outFields: [
+      ["interpretation", "str", "Watchstander briefing"],
+      ["messages[]", "list", "User / assistant turns for this incident only"],
+      ["source", "str", "cyberpal | heuristic"],
     ],
   },
   {
     id: "stix",
     system: "sensor",
     label: "STIX 2.1",
-    summary: "Local bundle always. TAXII share is a later human action.",
-    image: "learnplay/ot-sensor:stix",
-    port: "9209/tcp",
-    proto: "HTTP",
+    summary: "Local bundle. TAXII share is not in this tree.",
+    module: "ot_sensor.stix.StixExporter",
+    port: "otlab-work/stix",
+    proto: "file",
     consumes: "Incident + CopilotAssessment",
     emits: "StixBundleRef",
     inFields: [
@@ -401,59 +395,43 @@ const SERVICES: Service[] = [
       ["alert_body", "str", "STIX note"],
     ],
     outFields: [
-      ["path", "str", "reports/stix/{mode}/{hull}/{id}.json"],
-      ["taxii_shared", "bool", "False until Share"],
+      ["path", "str", "stix/{mode}/{hull}/{id}.json"],
+      ["taxii_shared", "bool", "Always false here"],
     ],
   },
   {
     id: "ui",
     system: "sensor",
-    label: "Operator UI",
-    summary: "Incidents, evidence, NIS2 clocks, TAXII Share. Full packet list stays here.",
-    image: "learnplay/ot-sensor:ui",
-    port: "8443/tcp",
-    proto: "HTTPS",
-    consumes: "Incident, Evidence, CopilotAssessment, StixBundleRef",
-    emits: "— (display + human confirm)",
+    label: "Operator dashboard",
+    summary: "Listen-only watchstander UI. Map, rules, models, correlation, honeypot, assistant. No injector toggles.",
+    module: "ot_sensor.app",
+    port: "127.0.0.1:8443",
+    proto: "HTTP",
+    consumes: "GET /api/snapshot",
+    emits: "display + ack / rules / assistant",
     inFields: [
-      ["alert_title", "str", "List row"],
-      ["nis2", "Nis2UiAlert | None", "When significant"],
+      ["snapshot", "dict", "Assets, incidents, services, honeypot"],
+      ["incident_id", "str", "Selected case"],
     ],
     outFields: [
-      ["human_confirm", "bool", "TAXII / NIS2 / actuation"],
-      ["share", "bool", "Off-ship"],
+      ["ack", "POST /api/ack", "Clear new-incident toast"],
+      ["rules", "POST /api/rules", "Retune clauses"],
+      ["assistant", "GET|POST /api/assistant", "Per-incident session"],
     ],
-  },
-  {
-    id: "taxii",
-    system: "sensor",
-    label: "TAXII 2.1",
-    summary: "Optional collection ot-incidents. Off until operator Share. Down in prod until confirmed.",
-    image: "learnplay/ot-sensor:taxii",
-    port: "8444/tcp",
-    proto: "HTTPS TAXII",
-    consumes: "StixBundleRef",
-    emits: "TAXII collection",
-    prodDown: true,
-    inFields: [
-      ["bundle", "STIX 2.1", "No payloads, no GT"],
-      ["STIX_TAXII", "str", "off unless Share"],
-    ],
-    outFields: [["ot-incidents", "collection", "Off-ship"]],
   },
   {
     id: "eval",
     system: "sensor",
     label: "Eval join",
-    summary: "dev only. Joins labels after emit. Never in the SLM prompt.",
-    image: "learnplay/ot-sensor:eval",
-    port: "9210/tcp",
-    proto: "NATS",
+    summary: "dev only. Joins labels after emit. Never in the SLM or CyberPal prompt.",
+    module: "ot_sensor.eval_join.EvalJoin",
+    port: "in-process",
+    proto: "dev",
     consumes: "LabelRecord + Incident",
     emits: "score record",
     hideInProd: true,
     inFields: [
-      ["LABEL_TOPIC", "str", "nats://labels:4223"],
+      ["labels", "list", "From the in-process sim"],
       ["incident_id", "str", "After SLM returns"],
     ],
     outFields: [
@@ -465,44 +443,130 @@ const SERVICES: Service[] = [
 
 const SIM_EDGES: Array<{ from: string; to: string; via: string }> = [
   { from: "scenario", to: "twins", via: "PlantState" },
-  { from: "scenario", to: "injector", via: "9101/tcp" },
   { from: "injector", to: "twins", via: "overlay" },
-  { from: "injector", to: "labels", via: "4223/tcp" },
-  { from: "twins", to: "gateways", via: "vcan_*" },
-  { from: "gateways", to: "cms", via: "9180/tcp" },
+  { from: "twins", to: "gateways", via: "CAN" },
+  { from: "gateways", to: "tapapi", via: "frames" },
+  { from: "injector", to: "labels", via: "dev labels" },
+  { from: "twins", to: "tapapi", via: "frames" },
 ];
 
 const SENSOR_EDGES: Array<{ from: string; to: string; via: string }> = [
-  { from: "n2k", to: "ingest", via: "otevent.>" },
-  { from: "modbus", to: "ingest", via: "otevent.>" },
-  { from: "n0183", to: "ingest", via: "otevent.>" },
-  { from: "n2k", to: "honeypot", via: "raw" },
-  { from: "modbus", to: "honeypot", via: "raw" },
-  { from: "n0183", to: "honeypot", via: "raw" },
-  { from: "ingest", to: "bytewax", via: "4222/tcp" },
-  { from: "ingest", to: "assets", via: "4222/tcp" },
-  { from: "ingest", to: "graph", via: "4222/tcp" },
-  { from: "assets", to: "graph", via: "9202" },
-  { from: "bytewax", to: "onnx", via: "features.>" },
-  { from: "bytewax", to: "rules", via: "features.>" },
-  { from: "onnx", to: "incidents", via: "9205" },
-  { from: "rules", to: "incidents", via: "9206" },
-  { from: "assets", to: "incidents", via: "9202" },
-  { from: "graph", to: "incidents", via: "9203" },
-  { from: "honeypot", to: "incidents", via: "pointer" },
-  { from: "incidents", to: "slm", via: "127.0.0.1:9208" },
-  { from: "incidents", to: "ui", via: "9207" },
-  { from: "slm", to: "stix", via: "9208" },
-  { from: "incidents", to: "stix", via: "9207" },
-  { from: "stix", to: "taxii", via: "8444/tcp" },
-  { from: "stix", to: "ui", via: "9209" },
-  { from: "labels", to: "eval", via: "4223/tcp" },
-  { from: "incidents", to: "eval", via: "9210/tcp" },
+  { from: "tap", to: "n2k", via: "CanFrame" },
+  { from: "tap", to: "honeypot", via: "raw" },
+  { from: "n2k", to: "assets", via: "OTEvent" },
+  { from: "n2k", to: "graph", via: "OTEvent" },
+  { from: "n2k", to: "bytewax", via: "OTEvent" },
+  { from: "assets", to: "graph", via: "AssetRecord" },
+  { from: "bytewax", to: "onnx", via: "FeatureWindow" },
+  { from: "bytewax", to: "rules", via: "FeatureWindow" },
+  { from: "onnx", to: "incidents", via: "ModelScore" },
+  { from: "rules", to: "incidents", via: "RuleHit" },
+  { from: "assets", to: "incidents", via: "AssetChange" },
+  { from: "graph", to: "incidents", via: "GraphChange" },
+  { from: "honeypot", to: "ui", via: "feed" },
+  { from: "incidents", to: "slm", via: "Incident" },
+  { from: "incidents", to: "assistant", via: "correlation JSON" },
+  { from: "incidents", to: "stix", via: "Incident" },
+  { from: "slm", to: "stix", via: "CopilotAssessment" },
+  { from: "incidents", to: "ui", via: "snapshot" },
+  { from: "slm", to: "ui", via: "alert text" },
+  { from: "assistant", to: "ui", via: "/api/assistant" },
+  { from: "labels", to: "eval", via: "dev" },
+  { from: "incidents", to: "eval", via: "dev" },
 ];
 
 const LAB_EDGES: Array<{ from: string; to: string; via: string }> = [
-  { from: "gateways", to: "n2k", via: "vcan_*" },
-  { from: "labels", to: "eval", via: "4223/tcp" },
+  { from: "tapapi", to: "tap", via: "GET /api/tap" },
+];
+
+const WORKFLOWS: Array<{
+  id: string;
+  system: SystemId;
+  name: string;
+  status: "active" | "fallback" | "spec";
+  path: string;
+  notes: string;
+}> = [
+  {
+    id: "live-tap",
+    system: "sensor",
+    name: "Live TAP ingest",
+    status: "active",
+    path: "opv-sim tick → GET /api/tap → Nmea2000Adapter → OTEvent",
+    notes: "Dashboard polls every 0.8 s. Sensor never ticks the plant.",
+  },
+  {
+    id: "spoof",
+    system: "sensor",
+    name: "GPS spoof detection",
+    status: "active",
+    path: "injector spoof → gps-spoof-nav + LSTM → Incident → NIS2 clocks",
+    notes: "Healthy-DOP walk-off vs GNSS-degraded. Listen-only recommend.",
+  },
+  {
+    id: "watchstander",
+    system: "sensor",
+    name: "Watchstander alert text",
+    status: "fallback",
+    path: "Incident → LocalSlm → CopilotAssessment",
+    notes: "watchstander-slm GGUF is not in git; template fills llm_unavailable.",
+  },
+  {
+    id: "cyberpal",
+    system: "sensor",
+    name: "CyberPal investigation",
+    status: "active",
+    path: "Incident JSON → Ollama cyberpal-2.0-4b → one session per incident_id",
+    notes: "Assistant tab. No bus writes, no honeypot hex, no attack_id.",
+  },
+  {
+    id: "hp",
+    system: "sensor",
+    name: "Honeypot capture",
+    status: "active",
+    path: "raw TAP → HoneypotService → otlab-work/hp + dashboard feed",
+    notes: "Rotate / retain. Forensic pointer only on the incident.",
+  },
+  {
+    id: "batch",
+    system: "sensor",
+    name: "Batch CLI lab",
+    status: "active",
+    path: "uv run ot-sensor --ticks 10 (in-process sim)",
+    notes: "Same adapters and correlator; no HTTP TAP.",
+  },
+  {
+    id: "eval",
+    system: "sensor",
+    name: "Dev eval join",
+    status: "active",
+    path: "LabelTopic → EvalJoin after emit",
+    notes: "prod: LABEL_TOPIC is fatal. Labels never enter SLM/CyberPal.",
+  },
+  {
+    id: "inject-ui",
+    system: "sim",
+    name: "Injector UI",
+    status: "active",
+    path: "browser :8444 → POST /api/control → AttackInjector",
+    notes: "Arm spoof / gyro / velocity / flood. Not on the sensor dashboard.",
+  },
+  {
+    id: "tap-serve",
+    system: "sim",
+    name: "Serve TAP + plant",
+    status: "active",
+    path: "uv run opv-sim --serve → tick loop → GET /api/tap",
+    notes: "In-memory CAN. SocketCAN vcan_* is not in this tree.",
+  },
+  {
+    id: "vcan",
+    system: "sim",
+    name: "Linux vcan TAP",
+    status: "spec",
+    path: "vcan_nav / vcan_prop / vcan_pwr / vcan_aux",
+    notes: "Ship-shaped TAP. CI uses InMemoryCanBus instead.",
+  },
 ];
 
 function visibleServices(system: SystemId, mode: Mode): Service[] {
@@ -528,21 +592,19 @@ function BoxGraph({
   selectedId,
   onSelect,
   showMeta,
-  images,
+  modules,
   ports,
-  downIds,
 }: {
   nodes: Array<{ id: string; label: string }>;
   edges: Array<{ from: string; to: string; via?: string }>;
   selectedId: string;
   onSelect: (id: string) => void;
   showMeta: boolean;
-  images: Record<string, string>;
+  modules: Record<string, string>;
   ports: Record<string, string>;
-  downIds: Set<string>;
 }) {
   const theme = useHostTheme();
-  const nodeWidth = showMeta ? 154 : 132;
+  const nodeWidth = showMeta ? 160 : 136;
   const nodeHeight = showMeta ? 58 : 40;
   const layout = computeDAGLayout({
     nodes: nodes.map((n) => ({ id: n.id })),
@@ -605,7 +667,6 @@ function BoxGraph({
       </svg>
       {layout.nodes.map((n) => {
         const selected = selectedId === n.id;
-        const down = downIds.has(n.id);
         return (
           <button
             key={n.id}
@@ -623,16 +684,13 @@ function BoxGraph({
               alignItems: "center",
               justifyContent: "center",
               background: theme.bg.elevated,
-              border: `1px solid ${
-                selected ? theme.accent.primary : theme.stroke.primary
-              }`,
+              border: `1px solid ${selected ? theme.accent.primary : theme.stroke.primary}`,
               borderRadius: 6,
               padding: "2px 6px",
               color: theme.text.primary,
               cursor: "pointer",
               appearance: "none",
               fontFamily: "inherit",
-              opacity: down ? 0.55 : 1,
             }}
           >
             <span style={{ fontSize: 11, lineHeight: 1.2, textAlign: "center" }}>
@@ -640,13 +698,7 @@ function BoxGraph({
             </span>
             {showMeta ? (
               <>
-                <span
-                  style={{
-                    fontSize: 9,
-                    color: theme.text.secondary,
-                    lineHeight: 1.2,
-                  }}
-                >
+                <span style={{ fontSize: 9, color: theme.text.secondary, lineHeight: 1.2 }}>
                   {ports[n.id]}
                 </span>
                 <span
@@ -660,7 +712,7 @@ function BoxGraph({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {images[n.id]}
+                  {modules[n.id]}
                 </span>
               </>
             ) : null}
@@ -671,31 +723,16 @@ function BoxGraph({
   );
 }
 
-function SchemaDetail({ svc, mode }: { svc: Service; mode: Mode }) {
-  const down = mode === "prod" && svc.prodDown;
+function SchemaDetail({ svc }: { svc: Service }) {
   return (
     <Stack gap={12}>
       <H3>
         {svc.label} — <Code>{svc.emits}</Code>
       </H3>
       <Text>{svc.summary}</Text>
-      {down ? (
-        <Callout tone="warning" title="prod — not listening">
-          Process may exist but <Code>{svc.port}</Code> is not published until
-          an operator confirms Share. Same confirmation path as actuation.
-        </Callout>
-      ) : null}
       <Grid columns={4} gap={12}>
-        <Stat value={svc.port} label="Port" />
-        <Stat value={svc.proto} label="Protocol" />
-        <Stat value={svc.image} label="Image" />
-        <Stat
-          value={mode}
-          label="Mode"
-          tone={mode === "dev" ? "warning" : "success"}
-        />
-      </Grid>
-      <Grid columns={2} gap={12}>
+        <Stat value={svc.module} label="Module" />
+        <Stat value={svc.port} label="Bind / path" />
         <Stat value={svc.consumes} label="Input" />
         <Stat value={svc.emits} label="Output" />
       </Grid>
@@ -707,88 +744,133 @@ function SchemaDetail({ svc, mode }: { svc: Service; mode: Mode }) {
   );
 }
 
+function WorkflowsView({ system }: { system: SystemId }) {
+  const rows = WORKFLOWS.filter((w) => w.system === system);
+  return (
+    <Stack gap={12}>
+      <H2>Active workflows</H2>
+      <Text>
+        What this tree actually runs. Spec-only rows stay in the architecture
+        docs until a TAP reader or TAXII listener lands.
+      </Text>
+      <Table
+        headers={["Workflow", "Status", "Path", "Notes"]}
+        rows={rows.map((w) => [w.name, w.status, w.path, w.notes])}
+        rowTone={rows.map((w) =>
+          w.status === "active" ? "success" : w.status === "fallback" ? "warning" : "info",
+        )}
+        striped
+      />
+    </Stack>
+  );
+}
+
+function NetworkHostView({ system }: { system: SystemId }) {
+  if (system === "sim") {
+    return (
+      <Stack gap={12}>
+        <H2>Host network (this lab)</H2>
+        <Table
+          headers={["Listener", "Process", "Clients"]}
+          rows={[
+            ["127.0.0.1:8444 /", "opv-sim --serve", "Operator browser (injector UI)"],
+            ["127.0.0.1:8444 /api/tap", "opv-sim", "ot-dashboard TAP client (GET only)"],
+            ["127.0.0.1:8444 /api/control", "opv-sim", "Injector UI; never the sensor"],
+            ["in-memory CAN", "SimRuntime.tick", "Device twins + gateways"],
+          ]}
+          striped
+        />
+        <Callout tone="danger" title="Listen-only TAP">
+          The sensor polls <Code>GET /api/tap</Code>. It does not POST control,
+          does not open SocketCAN, and does not write PGN.
+        </Callout>
+      </Stack>
+    );
+  }
+  return (
+    <Stack gap={12}>
+      <H2>Host network (this lab)</H2>
+      <Table
+        headers={["Listener", "Process", "Clients"]}
+        rows={[
+          ["127.0.0.1:8443 /", "ot-dashboard", "Operator browser (watchstander)"],
+          ["127.0.0.1:8443 /api/snapshot", "ot-dashboard", "Vite UI poll"],
+          ["127.0.0.1:8443 /api/assistant", "CyberPalAssistant", "Assistant tab; one session per incident"],
+          ["127.0.0.1:11434", "Ollama cyberpal-2.0-4b", "Investigation chat only"],
+          ["sim :8444 /api/tap", "TapMirror", "Dashboard ingest (GET)"],
+        ]}
+        striped
+      />
+      <Callout tone="info" title="No injector on :8443">
+        Attack arming stays on the simulator. Reset on the dashboard clears TAP
+        history only.
+      </Callout>
+    </Stack>
+  );
+}
+
 export default function OtLabSchema() {
   const [system, setSystem] = useCanvasState<SystemId>("system", "sensor");
-  const [mode, setMode] = useCanvasState<Mode>("mode", "prod");
+  const [mode, setMode] = useCanvasState<Mode>("mode", "dev");
   const [view, setView] = useCanvasState<View>("view", "services");
-  const [selected, setSelected] = useCanvasState<string>("svc", "ingest");
+  const [selected, setSelected] = useCanvasState<string>("svc", "n2k");
 
   const services = visibleServices(system, mode);
-  const svc =
-    services.find((s) => s.id === selected) ?? services[0] ?? SERVICES[0];
+  const svc = services.find((s) => s.id === selected) ?? services[0] ?? SERVICES[0];
   const edges = visibleEdges(system, mode);
-  const downIds = new Set(
-    services.filter((s) => mode === "prod" && s.prodDown).map((s) => s.id),
-  );
   const nodes = services.map((s) => ({ id: s.id, label: s.label }));
-  const images = Object.fromEntries(services.map((s) => [s.id, s.image]));
+  const modules = Object.fromEntries(services.map((s) => [s.id, s.module]));
   const ports = Object.fromEntries(services.map((s) => [s.id, s.port]));
 
-  const netNodes = nodes;
-  const netEdges =
-    view === "network" && system === "sensor"
-      ? [
-          ...edges,
-          ...LAB_EDGES.filter(
-            (e) =>
-              services.some((s) => s.id === e.to) &&
-              (mode === "dev" || e.from !== "labels"),
-          ).map((e) => ({ from: e.from, to: e.to, via: e.via })),
-        ]
-      : view === "network" && system === "sim"
-        ? [
-            ...edges,
-            ...LAB_EDGES.filter((e) => services.some((s) => s.id === e.from)),
-          ]
-        : edges;
-
   const extraPeerNodes: Array<{ id: string; label: string }> = [];
+  let graphEdges = edges;
   if (view === "network" && system === "sensor") {
-    extraPeerNodes.push(
-      { id: "gateways", label: "Sim gateways" },
-    );
-    if (mode === "dev") extraPeerNodes.push({ id: "labels", label: "Sim labels" });
+    extraPeerNodes.push({ id: "tapapi", label: "Sim TAP API" });
+    graphEdges = [
+      ...edges,
+      ...LAB_EDGES.filter((e) => services.some((s) => s.id === e.to)),
+    ];
   }
   if (view === "network" && system === "sim") {
-    extraPeerNodes.push(
-      { id: "n2k", label: "Sensor N2K" },
-    );
+    extraPeerNodes.push({ id: "tap", label: "Sensor TAP client" });
+    graphEdges = [
+      ...edges,
+      ...LAB_EDGES.filter((e) => services.some((s) => s.id === e.from)),
+    ];
   }
 
   const graphNodes = [
-    ...netNodes,
-    ...extraPeerNodes.filter((p) => !netNodes.some((n) => n.id === p.id)),
+    ...nodes,
+    ...extraPeerNodes.filter((p) => !nodes.some((n) => n.id === p.id)),
   ];
-  const graphEdges = netEdges.filter(
-    (e) =>
-      graphNodes.some((n) => n.id === e.from) &&
-      graphNodes.some((n) => n.id === e.to),
+  graphEdges = graphEdges.filter(
+    (e) => graphNodes.some((n) => n.id === e.from) && graphNodes.some((n) => n.id === e.to),
   );
 
-  const peerImages: Record<string, string> = {
-    gateways: "learnplay/opv-sim:gw",
-    labels: "nats:2.10.22",
-    n2k: "learnplay/ot-sensor:n2k",
+  const peerModules: Record<string, string> = {
+    tapapi: "opv_sim.app",
+    tap: "ot_sensor.tap",
   };
   const peerPorts: Record<string, string> = {
-    gateways: "vcan_*",
-    labels: "4223/tcp",
-    n2k: "vcan_*",
+    tapapi: "GET :8444/api/tap",
+    tap: "poll 0.8 s",
   };
 
   const selectSystem = (next: SystemId) => {
     setSystem(next);
-    setSelected(next === "sim" ? "scenario" : "ingest");
+    setSelected(next === "sim" ? "injector" : "n2k");
   };
+
+  const activeCount = WORKFLOWS.filter((w) => w.system === system && w.status === "active").length;
 
   return (
     <Stack gap={16}>
       <Stack gap={6}>
         <H1>OT lab schema</H1>
         <Text tone="secondary">
-          Click a box for input/output schemas, default ports, and image names.
-          Simulator is NMEA 2000 only (<Code>vcan_*</Code> / in-memory CAN).
-          Tests: <Code>pytest tests</Code>.
+          Click a box for description and input/output schemas. This canvas
+          matches the runnable uv workspace: in-memory CAN, HTTP TAP on{" "}
+          <Code>:8444</Code>, watchstander on <Code>:8443</Code>.
         </Text>
       </Stack>
       <Row gap={8} wrap align="center">
@@ -798,10 +880,7 @@ export default function OtLabSchema() {
         <Pill active={system === "sim"} onClick={() => selectSystem("sim")}>
           Simulator
         </Pill>
-        <Pill
-          active={system === "sensor"}
-          onClick={() => selectSystem("sensor")}
-        >
+        <Pill active={system === "sensor"} onClick={() => selectSystem("sensor")}>
           OT sensor
         </Pill>
         <Text size="small" tone="tertiary">
@@ -822,6 +901,9 @@ export default function OtLabSchema() {
         <Pill active={view === "network"} onClick={() => setView("network")}>
           Network
         </Pill>
+        <Pill active={view === "workflows"} onClick={() => setView("workflows")}>
+          Workflows
+        </Pill>
       </Row>
       <Grid columns={4} gap={12}>
         <Stat value={String(services.length)} label="Services" />
@@ -830,83 +912,74 @@ export default function OtLabSchema() {
           label="Ground truth"
           tone={mode === "dev" ? "warning" : "success"}
         />
-        <Stat
-          value={system === "sim" ? "Lab only" : mode === "prod" ? "Ship" : "Lab TAP"}
-          label="Where"
-        />
-        <Stat
-          value={view === "network" ? "Ports + images" : "Click a box"}
-          label="Diagram"
-        />
+        <Stat value={String(activeCount)} label="Active workflows" tone="success" />
+        <Stat value={system === "sim" ? ":8444" : ":8443"} label="Operator bind" />
       </Grid>
-      <BoxGraph
-        nodes={view === "network" ? graphNodes : nodes}
-        edges={view === "network" ? graphEdges : edges}
-        selectedId={svc.id}
-        onSelect={(id) => {
-          const hit = SERVICES.find((s) => s.id === id);
-          if (!hit) return;
-          if (hit.hideInProd && mode === "prod") return;
-          if (hit.system !== system) setSystem(hit.system);
-          setSelected(id);
-        }}
-        showMeta={view === "network"}
-        images={{ ...peerImages, ...images }}
-        ports={{ ...peerPorts, ...ports }}
-        downIds={downIds}
-      />
-      {view === "network" ? (
-        <Text size="small" tone="tertiary">
-          Edge labels are bind ports or NATS subjects. Dimmed box = not
-          published in this mode. Peer boxes (other system) are shown for wiring
-          only — click a box on this system for schemas.
-        </Text>
+      {view === "workflows" ? (
+        <WorkflowsView system={system} />
       ) : (
-        <Text size="small" tone="tertiary">
-          {system === "sim"
-            ? "Simulator is never deployed on the vessel. prod here means unlabeled CAN for certifying a prod sensor."
-            : "Adapters emit OTEvent only. Bytewax, ONNX, rules, incidents, SLM, and STIX do not import a protocol library."}
-        </Text>
-      )}
-      {view === "network" ? (
         <>
-          <H2>Docker networks</H2>
-          <Table
-            headers={["Network", "Members", "Ports"]}
-            rows={
-              system === "sim"
-                ? [
-                    ["ot-can", "twins, gateways, sensor n2k", "vcan_nav, vcan_prop, vcan_pwr, vcan_aux"],
-                    ["ot-lab", "labels (dev)", "4223/tcp"],
-                    ["ot-ctrl", "scenario, injector, cms", "9100, 9101, 9180/tcp"],
-                  ]
-                : [
-                    ["ot-can", "n2k adapter (shared with sim)", "vcan_* or can0–3"],
-                    ["ot-ot", "ingest, bytewax, onnx, rules, assets, graph, incidents, slm, stix, honeypot", "4222/tcp + 9201–9209"],
-                    ["ot-ops", "ui", "8443/tcp"],
-                    [
-                      "ot-offship",
-                      "taxii",
-                      mode === "prod" ? "8444/tcp unpublished" : "8444/tcp lab",
-                    ],
-                  ]
-            }
-            striped
+          <BoxGraph
+            nodes={view === "network" ? graphNodes : nodes}
+            edges={view === "network" ? graphEdges : edges}
+            selectedId={svc.id}
+            onSelect={(id) => {
+              const hit = SERVICES.find((s) => s.id === id);
+              if (!hit) return;
+              if (hit.hideInProd && mode === "prod") return;
+              if (hit.system !== system) setSystem(hit.system);
+              setSelected(id);
+            }}
+            showMeta={view === "network"}
+            modules={{ ...peerModules, ...modules }}
+            ports={{ ...peerPorts, ...ports }}
           />
-          <Table
-            headers={["Image", "Service", "Publish"]}
-            rows={services.map((s) => [
-              s.image,
-              s.label,
-              mode === "prod" && s.prodDown ? `${s.port} (down)` : s.port,
-            ])}
-            striped
-          />
+          <Text size="small" tone="tertiary">
+            {view === "network"
+              ? "Edge labels are the live contract. Click a box on this system for schemas."
+              : system === "sim"
+                ? "Simulator is never deployed on the vessel. prod means unlabeled CAN for certifying a prod sensor."
+                : "Adapters emit OTEvent. CyberPal and the SLM see correlation JSON only."}
+          </Text>
+          {view === "network" ? <NetworkHostView system={system} /> : null}
+          <Divider />
+          <H2>Selected service</H2>
+          <SchemaDetail svc={svc} />
         </>
+      )}
+      {view === "workflows" ? (
+        <Grid columns={2} gap={12}>
+          <Card>
+            <CardHeader>Install</CardHeader>
+            <CardBody>
+              <Text size="small">
+                {system === "sim" ? (
+                  <>
+                    <Code>uv sync --package opv-sim</Code> then{" "}
+                    <Code>uv run opv-sim --serve --mode dev --port 8444</Code>
+                  </>
+                ) : (
+                  <>
+                    <Code>uv sync --package ot-sensor --extra onnx --extra ui</Code>
+                    , build <Code>ot-sensor/frontend</Code>, then{" "}
+                    <Code>uv run ot-dashboard --mode dev --port 8443 --sim-url http://127.0.0.1:8444</Code>
+                  </>
+                )}
+              </Text>
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader>Readme</CardHeader>
+            <CardBody>
+              <Text size="small">
+                {system === "sim"
+                  ? "simulator/README.md — services, TAP contract, injector."
+                  : "ot-sensor/README.md — services, dashboard tabs, CyberPal import."}
+              </Text>
+            </CardBody>
+          </Card>
+        </Grid>
       ) : null}
-      <Divider />
-      <H2>Selected service</H2>
-      <SchemaDetail svc={svc} mode={mode} />
     </Stack>
   );
 }

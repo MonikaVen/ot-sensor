@@ -11,6 +11,8 @@ venv/
 .idea/
 .vscode/
 otlab-work/
+*.gguf
+*.safetensors
 ot-sensor/frontend/node_modules/
 ot-sensor/frontend/dist/
 dist/

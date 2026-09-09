@@ -27,11 +27,16 @@ function layout(assets: Asset[]): Map<string, Pt> {
   return pos;
 }
 
-function critClass(c: number): string {
-  if (c >= 5) return "crit-5";
-  if (c >= 4) return "crit-4";
-  if (c >= 3) return "crit-3";
-  return "crit-low";
+function trafficClass(a: Asset): string {
+  if (a.traffic === "attack") return "traffic-attack";
+  if (a.traffic === "benign") return "traffic-benign";
+  return "traffic-silent";
+}
+
+function trafficLabel(a: Asset): string {
+  if (a.traffic === "attack") return "attack";
+  if (a.traffic === "benign") return "benign";
+  return "silent";
 }
 
 export function assetMapSvg(
@@ -41,6 +46,9 @@ export function assetMapSvg(
   overlay: "comms" | "deps",
   selectedId: string | null,
 ): string {
+  if (assets.length === 0) {
+    return `<div class="map-wrap"><p class="muted map-empty">No talkers on the TAP yet. Start the listen-only TAP to autodetect assets from address claims and PGNs.</p></div>`;
+  }
   const pos = layout(assets);
   const height = Math.max(
     280,
@@ -87,10 +95,9 @@ export function assetMapSvg(
     .map((a) => {
       const p = pos.get(a.asset_id);
       if (!p) return "";
-      const hot = a.incident_ids.length > 0;
-      const cls = `node ${critClass(a.criticality)} ${a.live ? "live" : "ghost"} ${selectedId === a.asset_id ? "sel" : ""} ${hot ? "hot" : ""}`;
-      const meta = `SA ${esc(a.asset_id)} · C${a.criticality}${hot ? " · INC" : ""}${a.live ? "" : " · silent"}`;
-      return `<g role="button" tabindex="0" data-asset="${esc(a.asset_id)}" aria-label="${esc(a.name)} SA ${esc(a.asset_id)}" class="${cls}" style="cursor:pointer">
+      const cls = `node ${trafficClass(a)} ${a.expected ? "" : "new"} ${selectedId === a.asset_id ? "sel" : ""}`;
+      const meta = `SA ${esc(a.asset_id)} · ${trafficLabel(a)}${a.expected ? "" : " · new"}`;
+      return `<g role="button" tabindex="0" data-asset="${esc(a.asset_id)}" aria-label="${esc(a.name)} SA ${esc(a.asset_id)} ${trafficLabel(a)}" class="${cls}" style="cursor:pointer">
         <rect x="${p.x - 88}" y="${p.y - 16}" width="176" height="32" rx="2" />
         <text x="${p.x - 80}" y="${p.y - 2}" class="node-name">${esc(a.name)}</text>
         <text x="${p.x - 80}" y="${p.y + 11}" class="node-meta">${meta}</text>

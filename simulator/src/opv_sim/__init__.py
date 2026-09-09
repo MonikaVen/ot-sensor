@@ -44,6 +44,12 @@ class ScenarioEngine:
             else:
                 phase = "hold"
                 attack = "gps-spoof-primary"
+        elif self.attack_id in ("heading-spoof", "gyro"):
+            phase = "inject"
+            attack = "heading-spoof"
+        elif self.attack_id in ("sog-spoof", "velocity"):
+            phase = "inject"
+            attack = "sog-spoof"
         elif self.attack_id == "pgn-flood":
             phase = "flood"
             attack = "pgn-flood"

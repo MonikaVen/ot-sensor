@@ -44,6 +44,31 @@ def test_twins_spoof_splits_gnss():
     assert abs(g1["lat_deg"] - g2["lat_deg"]) > 1e-4
 
 
+def test_twins_gyro_spoofs_heading():
+    sim = OpvSimulator(attack_id="heading-spoof", scenario_id="underway")
+    plant, frames = sim.tick(0)
+    from otlab.pgn import decode_fields
+
+    hdg = next(decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 127250 and decode_fields(f)["sa"] == 35)
+    delta = abs((hdg["heading_deg"] - plant.heading_deg + 180) % 360 - 180)
+    assert delta > 20
+    assert plant.attack_id == "heading-spoof"
+    assert sim.labels.records
+    assert any(r.victim_sa == 35 and r.pgn == 127250 for r in sim.labels.records)
+
+
+def test_twins_velocity_spoofs_sog():
+    sim = OpvSimulator(attack_id="sog-spoof", scenario_id="underway")
+    plant, frames = sim.tick(0)
+    from otlab.pgn import decode_fields
+
+    g1 = next(decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 129026 and decode_fields(f)["sa"] == 16)
+    g2 = next(decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 129026 and decode_fields(f)["sa"] == 17)
+    assert g1["sog_kn"] > plant.sog_kn + 4
+    assert abs(g2["sog_kn"] - plant.sog_kn) < 0.2
+    assert plant.attack_id == "sog-spoof"
+
+
 def test_labels_dev_only():
     sim = OpvSimulator(sim_mode="dev", attack_id="gps-spoof-primary")
     sim.tick(10)

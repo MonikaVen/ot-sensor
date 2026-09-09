@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 
 import pytest
 
@@ -64,8 +65,83 @@ def test_honeypot_rotation_and_retain(tmp_path):
             hp.write_frame(fr)
     hp.rotate(t)
     assert hp.rotation >= 1
-    assert all(p.suffixes[-2:] == [".jsonl", ".gz"] or p.name.endswith(".jsonl.gz") for p in hp.closed)
-    assert len(hp.closed) <= 2
+    assert all(p.name.endswith(".jsonl.gz") for p in hp.closed)
+    by_seg: dict[str, int] = {}
+    for p in hp.closed:
+        by_seg[p.parent.name] = by_seg.get(p.parent.name, 0) + 1
+        assert "-n" in p.name and "-b" in p.name and "-k" in p.name and "-r" in p.name
+        assert "open-" not in p.name
+    assert by_seg
+    assert all(n <= 2 for n in by_seg.values())
+    assert hp.written > 0
+    assert (tmp_path / "_manifest.jsonl").is_file()
+    hp.wipe()
+    assert hp.usage()["bytes"] == 0
+    assert hp.written == 0
+    assert hp.feed() == []
+    assert list(tmp_path.rglob("*")) == [] or not any(p.is_file() for p in tmp_path.rglob("*"))
+
+
+def test_honeypot_live_feed(tmp_path):
+    import base64
+    import json
+
+    hp = Honeypot(tmp_path, "dev", rotate_max_bytes=50_000, retain_max_files=4, live_max=5)
+    plant = ScenarioEngine().state_at(0)
+    from opv_sim.twins import AttackInjector, DeviceTwins
+    from otlab.bus import InMemoryCanBus
+
+    bus = InMemoryCanBus()
+    twins = DeviceTwins(bus, AttackInjector("dev"))
+    frames = twins.publish(plant)
+    assert frames
+    for fr in frames:
+        hp.write_frame(fr)
+    feed = hp.feed()
+    assert feed
+    assert len(feed) <= 5
+    row = feed[0]
+    assert row["payload_hex"]
+    assert "can_id" in row
+    assert "pgn" not in row
+    raw = hp._path.read_text(encoding="utf-8").splitlines()[0]
+    rec = json.loads(raw)
+    assert base64.b64decode(rec["payload_b64"])
+    assert rec["kind"] in {"can", "error", "empty"}
+    segs = {fr.segment for fr in frames}
+    assert segs <= set(hp._slots)
+    hp.wipe()
+    assert hp.feed() == []
+
+
+def test_honeypot_drop_when_all_held(tmp_path):
+    hp = Honeypot(tmp_path, "dev", rotate_max_bytes=120, retain_max_files=1)
+    t = datetime.now(timezone.utc)
+    plant = ScenarioEngine().state_at(0)
+    from opv_sim.twins import AttackInjector, DeviceTwins
+    from otlab.bus import InMemoryCanBus
+
+    bus = InMemoryCanBus()
+    twins = DeviceTwins(bus, AttackInjector("dev"))
+    for _ in range(8):
+        for fr in twins.publish(plant):
+            hp.write_frame(fr)
+    hp.rotate(t)
+    assert hp.closed
+    for p in list(hp.closed):
+        hp.hold_paths.add(str(p))
+    before = hp.dropped
+    written = hp.written
+    for _ in range(8):
+        for fr in twins.publish(plant):
+            hp.write_frame(fr)
+    assert hp.dropped > before
+    assert hp.written >= written
+    for p in hp.closed:
+        assert p.exists()
+    for path, _seq in hp.open_files():
+        assert "open-" in path.name
+
 
 
 def test_asset_criticality_and_dependents():
@@ -77,6 +153,27 @@ def test_asset_criticality_and_dependents():
     assert rec.criticality == 5
     assert rec.nis2_service == "navigation"
     assert "56" in rec.dependents  # autopilot
+    assert rec.expected is True
+    assert "pgn:129025" in rec.detected_via
+
+
+def test_asset_autodetect_unknown_and_claim():
+    from otlab.pgn import encode_claim, encode_heading
+
+    det = AssetDetector(REPO / "docs/architecture/samples/sources/asset-criticality.yaml")
+    t = datetime.now(timezone.utc)
+    ad = Nmea2000Adapter()
+    assert det.live == {}
+    rogue = det.observe(ad.convert(encode_heading(t, "nav", 44, 90)))
+    assert rogue.expected is False
+    assert rogue.name == "heading sensor"
+    assert rogue.criticality == 2
+    assert any(c["change"] == "new_asset" and c["asset_id"] == "44" for c in det.changes)
+    claimed = det.observe(ad.convert(encode_claim(t, "nav", 88, "ROGUE")))
+    assert claimed.expected is False
+    assert claimed.identity["iso_name"] == "ROGUE"
+    assert claimed.name == "ROGUE"
+    assert "address_claim" in claimed.detected_via
 
 
 def test_comms_graph_new_edge():
@@ -107,6 +204,51 @@ def test_features_split_and_rules_fire():
     hit = RulesEnrich().gps_spoof_nav(win)
     assert hit.fired
     assert hit.techniques == ["T1692.002"]
+    quiet = RulesEnrich()
+    quiet.settings.apply(clauses={"gnss1_gnss2_split_m": 10_000})
+    assert quiet.gps_spoof_nav(win).fired is False
+
+
+def test_lab_rule_packs_iso_request_and_unexpected_talker():
+    from otlab.pgn import encode_heading_control, encode_iso_request
+
+    t = datetime.now(timezone.utc)
+    ad = Nmea2000Adapter()
+    win = FeatureStage().window([ad.convert(encode_iso_request(t, "nav", 44, 16, 129025))])
+    assert win.features["iso_request_count"] >= 1
+    assert win.features["unexpected_talker_count"] >= 1
+    by = {h.rule_id: h for h in RulesEnrich().evaluate(win)}
+    assert by["n2k-iso-request"].fired
+    assert by["unexpected-talker"].fired
+    assert by["gps-spoof-nav"].fired is False
+    assert by["n2k-heading-control"].fired is False
+
+    win = FeatureStage().window([ad.convert(encode_heading_control(t, "nav", 44, 90))])
+    by = {h.rule_id: h for h in RulesEnrich().evaluate(win)}
+    assert by["n2k-heading-control"].fired
+    assert by["unexpected-talker"].fired
+
+    flood = FeatureStage().window([ad.convert(encode_heading(t, "nav", 35, 90)) for _ in range(20)])
+    by = {h.rule_id: h for h in RulesEnrich().evaluate(flood)}
+    assert by["pgn-flood"].fired
+    assert by["unexpected-talker"].fired is False
+
+
+def test_throughput_lstm_tracks_then_flags_jump():
+    from ot_sensor.lstm import ThroughputLstm
+
+    model = ThroughputLstm()
+    last = None
+    for _ in range(20):
+        last = model.step(40.0)
+    assert last is not None
+    assert last["fired"] is False
+    assert last["residual_fps"] < 40
+    jump = model.step(400.0)
+    assert jump["threshold_fps"] == jump["predicted_fps"]
+    assert jump["actual_fps"] > jump["threshold_fps"]
+    assert jump["crossed"] is True
+    assert jump["fired"] is True
 
 
 def test_onnx_lstm_runs_or_unavailable():
@@ -195,3 +337,52 @@ def test_eval_join_dev_only():
     with pytest.raises(RuntimeError):
         EvalJoin("prod", label_topic_set=True)
     assert EvalJoin("prod").enabled is False
+
+
+def test_cyberpal_briefing_strips_raw_and_isolates_sessions(tmp_path, monkeypatch):
+    from ot_sensor.assistant import CyberPalAssistant, briefing_payload
+
+    monkeypatch.setattr("ot_sensor.assistant.ollama_ready", lambda: False)
+    payload = briefing_payload(
+        {
+            "incident_id": "inc-0001",
+            "state": "open",
+            "severity": "critical",
+            "families": ["gnss-spoof"],
+            "asset_ids": ["16"],
+            "techniques": ["T1692.002"],
+            "risk": {"total": 86, "nis2_significant": True, "dependent_asset_ids": ["56"]},
+            "alerts": [{"event_id": "e1", "fired_rules": ["gps-spoof-nav"], "evidence_summary": {"top_features": ["gnss_dr_residual_m"]}}],
+            "copilot": {"status": "llm_unavailable", "alert_title": "t", "alert_body": "b", "recommend": ["Distrust GNSS-1"]},
+        },
+        [{"asset_id": "16", "name": "GNSS-1", "segment": "nav", "criticality": 5, "dependents": ["56"]}],
+    )
+    blob = json.dumps(payload)
+    assert "payload_hex" not in blob
+    assert "attack_id" not in blob
+    assert payload["assets"][0]["name"] == "GNSS-1"
+    fat = briefing_payload(
+        {
+            "incident_id": "inc-fat",
+            "alerts": [
+                {
+                    "event_id": f"e{i}",
+                    "fired_rules": ["gps-spoof-nav"],
+                    "rules": [{"rule_id": "gps-spoof-nav", "fired": True, "clauses_fired": ["gnss_dr_residual_m"]}],
+                    "models": [{"model_id": "throughput-lstm", "scores": {"a": 0.1}, "fired": True}],
+                    "graph": [{"src": "16", "dst": "56", "pgn": 129025}],
+                    "evidence_summary": {"top_features": ["gnss_dr_residual_m"] * 20},
+                }
+                for i in range(20)
+            ],
+        }
+    )
+    assert len(json.dumps(fat, default=str)) < 8000
+    assert len(fat["alerts"]) <= 10
+    assert fat["fired_rules"][0]["rule_id"] == "gps-spoof-nav"
+    asst = CyberPalAssistant(REPO, tmp_path)
+    a = asst.ask("inc-0001", "Why did this fire?", {"incident_id": "inc-0001", **payload})
+    b = asst.ask("inc-0002", "Which assets?", {"incident_id": "inc-0002", "families": ["flood"], "asset_ids": ["44"], "alerts": []})
+    assert a["incident_id"] == "inc-0001"
+    assert b["incident_id"] == "inc-0002"
+    assert asst.sessions["inc-0001"].messages[0]["content"] != asst.sessions["inc-0002"].messages[0]["content"]

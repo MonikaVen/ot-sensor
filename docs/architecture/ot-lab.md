@@ -20,7 +20,7 @@ ot-sensor/frontend/        Vite + TypeScript operator UI
 docs/architecture/         specs and sample maps / models
 ```
 
-uv workspace: `simulator/` (`opv-sim`) and `ot-sensor/` (`ot-sensor`). The sensor depends on the simulator package for the in-process lab.
+uv workspace: `simulator/` (`opv-sim`) and `ot-sensor/` (`ot-sensor`). The sensor depends on the simulator package for codecs and the batch lab. Live dashboard ingest is listen-only `GET /api/tap`. The **attack injector** is only on `opv-sim` (CLI `--attack` / `--serve` UI on `:8444`).
 
 Feature windows match the Bytewax contract (`FeatureWindow` + `event_id`). The lab operator is `FeatureStage` in-process. A later Bytewax worker can replace it without changing ONNX/rules/incidents.
 
@@ -40,6 +40,8 @@ NMEA 2000 only: `PlantState` → device twins → `InMemoryCanBus` / `vcan_*`. N
 
 CLI: `SIM_MODE=dev uv run opv-sim --attack gps-spoof-primary --ticks 8`
 
+Injector UI: `uv run opv-sim --serve --port 8444`
+
 ## Sensor services (`SENSOR_MODE=dev|prod`)
 
 | Service | Module | Test | Notes |
@@ -48,13 +50,14 @@ CLI: `SIM_MODE=dev uv run opv-sim --attack gps-spoof-primary --ticks 8`
 | NMEA 0183 adapter | `Nmea0183Adapter` | talker id + HDT | |
 | Modbus adapter | `ModbusAdapter` | reads only | |
 | Honeypot | `Honeypot` | rotate + retain cap | Async gzip; never unlink `open-{pid}` |
-| Asset detector | `AssetDetector` | criticality 5, dependents | Loads `asset-criticality.yaml` |
+| Asset detector | `AssetDetector` | live TAP talkers + YAML join | Autodetect SA/PGN/NAME; silent catalog not shown |
 | Comms graph | `CommsGraph` | `new_edge` for SA 44 | Expected vs live |
 | Features (Bytewax 1–5) | `FeatureStage` | GNSS split / DR residual | No ONNX inside |
 | ONNX enrich | `OnnxEnrich` | `throughput-lstm` or `model_unavailable` | Extra `otlab[onnx]` |
 | Rules enrich | `RulesEnrich.gps_spoof_nav` | fires on healthy-DOP walk-off | Parallel to ONNX |
 | Incidents | `IncidentCorrelator` | risk + NIS2; hop dedup | Does not wait on SLM |
 | Local SLM | `LocalSlm` | `llm_unavailable` without GGUF; `LLM_ENDPOINT` fatal in prod | Template fallback |
+| CyberPal assistant | `CyberPalAssistant` | one session per incident; `/api/assistant` | Correlation JSON only; not a detector |
 | STIX 2.1 | `StixExporter` | local file, `taxii_shared=False` | |
 | Eval join | `EvalJoin` | prod + label topic fatal | After emit; not in prompt |
 | Dashboard | `ot_sensor.app` | `test_dashboard.py` | Asset map snapshot, `/api/snapshot` |
@@ -63,18 +66,19 @@ End-to-end: `test_pipeline.py` runs `gps-spoof-primary` ticks → `gps-spoof-nav
 
 CLI: `SENSOR_MODE=dev uv run ot-sensor --ticks 10`
 
-Operator UI: `uv run ot-dashboard` (build `ot-sensor/frontend/` first) on `:8443`.
+Operator UI: `uv run ot-dashboard` (build `ot-sensor/frontend/` first) on `:8443`. Injector stays on `:8444`. Dashboard polls `OPV_SIM_URL` / `--sim-url` (`GET /api/tap`); it does not tick the plant. Assistant tab talks to local Ollama `cyberpal-2.0-4b` (`uv run python -m ot_sensor.cyberpal`).
 
 ## Dataflow (lab)
 
 ```
-ScenarioEngine → DeviceTwins → InMemoryCanBus
-                      ↓
-              Nmea2000Adapter → OTEvent
-                      ├→ Honeypot (rotate/retain)
-                      ├→ AssetDetector
-                      ├→ CommsGraph
-                      └→ FeatureStage → ONNX ∥ rules → Incidents → LocalSlm → STIX
+ScenarioEngine → DeviceTwins → InMemoryCanBus → GET /api/tap
+                                                     ↓
+                                             Nmea2000Adapter → OTEvent
+                                                     ├→ Honeypot (rotate/retain)
+                                                     ├→ AssetDetector
+                                                     ├→ CommsGraph
+                                                     └→ FeatureStage → ONNX ∥ rules → Incidents → LocalSlm → STIX
+                                                     dashboard GET/POST /api/assistant ← CyberPal (per-incident)
 dev: LabelTopic ──→ EvalJoin (after SLM)
 ```
 

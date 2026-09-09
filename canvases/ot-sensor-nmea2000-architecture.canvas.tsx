@@ -23,7 +23,18 @@ import {
   useHostTheme,
 } from "cursor/canvas";
 
-type View = "pipeline" | "models" | "rules" | "attck" | "honeypot" | "assets" | "topology" | "stix" | "sources";
+type View =
+  | "pipeline"
+  | "models"
+  | "rules"
+  | "attck"
+  | "honeypot"
+  | "assets"
+  | "topology"
+  | "stix"
+  | "sources"
+  | "network"
+  | "workflows";
 type Mode = "dev" | "prod";
 type Sources = "n2k" | "modbus" | "both";
 type GraphOverlay = "expected" | "live";
@@ -46,6 +57,7 @@ const SENSOR_NODES = [
   { id: "incidents", label: "Incidents" },
   { id: "llm", label: "Local SLM" },
   { id: "slm", label: "SLM weights" },
+  { id: "assistant", label: "CyberPal" },
   { id: "stix", label: "STIX 2.1" },
   { id: "ops", label: "Operator" },
   { id: "registry", label: "Model registry" },
@@ -78,7 +90,9 @@ const SENSOR_EDGES = [
   { from: "graph", to: "incidents" },
   { from: "incidents", to: "llm" },
   { from: "slm", to: "llm" },
+  { from: "incidents", to: "assistant" },
   { from: "incidents", to: "stix" },
+  { from: "assistant", to: "ops" },
   { from: "attck", to: "llm" },
   { from: "attck", to: "stix" },
   { from: "topo", to: "llm" },
@@ -338,6 +352,20 @@ const SERVICE_SCHEMAS: Record<string, ServiceSchema> = {
       ["confidence", "float", "Bound to scores and rule fires, not an SLM self-score"],
       ["recommend", "list[str]", "Detect / contain only"],
       ["fault_vs_attack", "str", "attack | fault | undetermined"],
+    ],
+  },
+  assistant: {
+    className: "AssistantSession",
+    summary:
+      "CyberPal investigation. One session per incident. Correlation JSON only — no raw CAN, honeypot blobs, or attack_id.",
+    consumes: "Incident + related assets",
+    emits: "AssistantSession",
+    fields: [
+      ["incident_id", "str", "Session key"],
+      ["interpretation", "str", "Briefing from correlation"],
+      ["messages", "list", "User / assistant turns for this incident"],
+      ["source", "str", "cyberpal | heuristic"],
+      ["status", "str", "ok | llm_unavailable"],
     ],
   },
   slm: {
@@ -1399,6 +1427,65 @@ function StixView({ mode }: { mode: Mode }) {
   );
 }
 
+function NetworkView() {
+  return (
+    <Stack gap={12}>
+      <H2>Host network</H2>
+      <Text>
+        Watchstander UI on <Code>:8443</Code> polls the simulator TAP. CyberPal
+        talks to local Ollama. The sensor never writes the bus.
+      </Text>
+      <Table
+        headers={["Listener", "Process", "Role"]}
+        rows={[
+          ["127.0.0.1:8443", "ot-dashboard", "Map, rules, models, correlation, honeypot, assistant"],
+          ["127.0.0.1:8443 /api/snapshot", "LabRuntime", "Operator poll"],
+          ["127.0.0.1:8443 /api/assistant", "CyberPalAssistant", "One session per incident_id"],
+          ["127.0.0.1:11434", "Ollama cyberpal-2.0-4b", "Investigation only"],
+          ["sim :8444 /api/tap", "TapMirror GET", "Listen-only CAN ingest"],
+        ]}
+        striped
+      />
+      <Callout tone="danger" title="No injector on the dashboard">
+        Attack arming is <Code>opv-sim --serve</Code> on :8444. Dashboard Reset
+        clears TAP history only.
+      </Callout>
+    </Stack>
+  );
+}
+
+function WorkflowsView() {
+  return (
+    <Stack gap={12}>
+      <H2>Active workflows</H2>
+      <Table
+        headers={["Workflow", "Status", "Path"]}
+        rows={[
+          ["Live TAP ingest", "active", "GET /api/tap → N2K adapter → OTEvent"],
+          ["GPS spoof detection", "active", "gps-spoof-nav ∥ throughput-lstm → Incident → NIS2"],
+          ["Watchstander text", "fallback", "LocalSlm template until watchstander-slm GGUF"],
+          ["CyberPal investigation", "active", "correlation JSON → one Ollama session per incident"],
+          ["Honeypot capture", "active", "raw TAP → otlab-work/hp + Honeypot tab"],
+          ["Batch CLI", "active", "uv run ot-sensor --ticks 10"],
+          ["SocketCAN vcan_*", "spec", "Not in this tree"],
+          ["TAXII share", "spec", "Local STIX file only"],
+        ]}
+        rowTone={[
+          "success",
+          "success",
+          "warning",
+          "success",
+          "success",
+          "success",
+          "info",
+          "info",
+        ]}
+        striped
+      />
+    </Stack>
+  );
+}
+
 export default function OtSensorNmea2000Architecture() {
   const [view, setView] = useCanvasState<View>("view", "pipeline");
   const [mode, setMode] = useCanvasState<Mode>("mode", "prod");
@@ -1416,6 +1503,7 @@ export default function OtSensorNmea2000Architecture() {
     "incidents",
     "llm",
     "slm",
+    "assistant",
     "honeypot",
     "assets",
     "graph",
@@ -1491,6 +1579,12 @@ export default function OtSensorNmea2000Architecture() {
         <Pill active={view === "stix"} onClick={() => setView("stix")}>
           STIX
         </Pill>
+        <Pill active={view === "network"} onClick={() => setView("network")}>
+          Network
+        </Pill>
+        <Pill active={view === "workflows"} onClick={() => setView("workflows")}>
+          Workflows
+        </Pill>
         <Button
           variant="ghost"
           onClick={() =>
@@ -1554,6 +1648,8 @@ export default function OtSensorNmea2000Architecture() {
       {view === "assets" ? <AssetsView /> : null}
       {view === "topology" ? <TopologyView mode={mode} /> : null}
       {view === "stix" ? <StixView mode={mode} /> : null}
+      {view === "network" ? <NetworkView /> : null}
+      {view === "workflows" ? <WorkflowsView /> : null}
     </Stack>
   );
 }

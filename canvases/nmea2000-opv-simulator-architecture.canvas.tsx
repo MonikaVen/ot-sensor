@@ -1,9 +1,6 @@
 import {
   Button,
   Callout,
-  Card,
-  CardBody,
-  CardHeader,
   Code,
   CollapsibleSection,
   Divider,
@@ -24,7 +21,7 @@ import {
   useHostTheme,
 } from "cursor/canvas";
 
-type View = "topology" | "devices" | "attacks" | "gps";
+type View = "topology" | "devices" | "attacks" | "gps" | "network" | "workflows";
 type Mode = "dev" | "prod";
 
 const SIM_NODES = [
@@ -55,6 +52,144 @@ const SIM_EDGES = [
   { from: "vcan", to: "sensor" },
 ];
 
+type SimSchema = {
+  className: string;
+  summary: string;
+  consumes: string;
+  emits: string;
+  fields: Array<[string, string, string]>;
+};
+
+const SIM_SCHEMAS: Record<string, SimSchema> = {
+  scenario: {
+    className: "PlantState",
+    summary: "Underway kinematics. Drives twins. Lab only.",
+    consumes: "scenario_id, SIM_MODE",
+    emits: "PlantState",
+    fields: [
+      ["t", "datetime", "Scenario clock"],
+      ["lat_deg / lon_deg / sog_kn / heading_deg", "float", "Nav plant"],
+      ["phase", "str", "baseline | ramp | hold | recover"],
+    ],
+  },
+  attack: {
+    className: "AttackInjector",
+    summary: "Overlays false PGNs. UI on :8444. Labels stay off-bus.",
+    consumes: "POST /api/control",
+    emits: "overlay + LabelRecord (dev)",
+    fields: [
+      ["attack", "str", "spoof | gyro | velocity | pgn_flood | …"],
+      ["enabled", "bool", "Arm or clear"],
+      ["attack_id", "str | None", "gps-spoof-primary when spoof is on"],
+    ],
+  },
+  twins: {
+    className: "CanFrame",
+    summary: "ISO 11783 NAME + SA publishers on four trunks.",
+    consumes: "PlantState + overlay",
+    emits: "CanFrame",
+    fields: [
+      ["segment", "str", "nav | propulsion | power | aux"],
+      ["can_id", "int", "29-bit"],
+      ["data_hex", "str", "PGN payload"],
+      ["sa", "int", "Source address"],
+    ],
+  },
+  nav: {
+    className: "CanFrame",
+    summary: "Nav backbone twins: GNSS-1/2, gyro, AIS, AP, MFD, decoy SA 99.",
+    consumes: "PlantState",
+    emits: "PGN 129025/026/029/539, 127250, …",
+    fields: [
+      ["iface", "str", "vcan_nav (in-memory in this tree)"],
+      ["pgn", "int", "Published PGN"],
+    ],
+  },
+  prop: {
+    className: "CanFrame",
+    summary: "Twin diesels, gearbox, fuel, thruster.",
+    consumes: "PlantState",
+    emits: "PGN 127488/127489/127493",
+    fields: [
+      ["iface", "str", "vcan_prop"],
+      ["sa", "int", "0 / 1 engines"],
+    ],
+  },
+  pwr: {
+    className: "CanFrame",
+    summary: "Gensets, batteries, switchbank.",
+    consumes: "PlantState",
+    emits: "PGN 127508 / 127501",
+    fields: [["iface", "str", "vcan_pwr"]],
+  },
+  aux: {
+    className: "CanFrame",
+    summary: "Tanks, environment, bilge / fire binaries.",
+    consumes: "PlantState",
+    emits: "PGN 130310 / 127505 / 127501",
+    fields: [["iface", "str", "vcan_aux"]],
+  },
+  gw: {
+    className: "IsolatingGateway",
+    summary: "Allowlisted cross-segment forward. Engine commands never onto nav.",
+    consumes: "CanFrame",
+    emits: "CanFrame (allowlist)",
+    fields: [
+      ["path", "str", "nav → propulsion heading / COG/SOG"],
+      ["dropped", "bool", "Architecture violation if forced"],
+    ],
+  },
+  vcan: {
+    className: "TapSnapshot",
+    summary: "GET /api/tap. In-memory CAN in CI. SocketCAN vcan_* is spec-only here.",
+    consumes: "SimRuntime.tick",
+    emits: "frames[] + plant + attacks",
+    fields: [
+      ["frames", "list[CanFrame]", "Last hop"],
+      ["plant", "PlantState", "Injector UI kinematics"],
+      ["attacks", "dict", "Armed overlays"],
+    ],
+  },
+  sensor: {
+    className: "TapMirror",
+    summary: "OT sensor TAP client. GET only. Never POSTs /api/control.",
+    consumes: "GET /api/tap",
+    emits: "CanFrame into Nmea2000Adapter",
+    fields: [
+      ["base_url", "str", "http://127.0.0.1:8444"],
+      ["poll_s", "float", "0.8"],
+    ],
+  },
+  labels: {
+    className: "LabelRecord",
+    summary: "dev-only. Never on CAN. Sensor eval join after emit.",
+    consumes: "injector",
+    emits: "LabelRecord",
+    fields: [
+      ["attack_id", "str", "gps-spoof-primary"],
+      ["technique", "str", "T1692.002"],
+      ["victim_sa / pgn / segment", "…", "Eval join key"],
+    ],
+  },
+};
+
+function SchemaPanel({ nodeId, label }: { nodeId: string; label: string }) {
+  const schema = SIM_SCHEMAS[nodeId] ?? SIM_SCHEMAS.twins;
+  return (
+    <Stack gap={12}>
+      <H3>
+        {label} — <Code>{schema.className}</Code>
+      </H3>
+      <Text>{schema.summary}</Text>
+      <Grid columns={2} gap={12}>
+        <Stat value={schema.consumes} label="Consumes" />
+        <Stat value={schema.emits} label="Emits" />
+      </Grid>
+      <Table headers={["Field", "Type", "Role"]} rows={schema.fields} striped />
+    </Stack>
+  );
+}
+
 const DEV_LABEL_NODE = { id: "labels", label: "GT labels (dev)" };
 const DEV_LABEL_EDGE = { from: "labels", to: "sensor" };
 
@@ -63,11 +198,15 @@ function FlowChart({
   edges,
   direction,
   accentIds,
+  selectedId,
+  onSelect,
 }: {
   nodes: Array<{ id: string; label: string }>;
   edges: Array<{ from: string; to: string }>;
   direction: "vertical" | "horizontal";
   accentIds: Set<string>;
+  selectedId?: string;
+  onSelect?: (id: string) => void;
 }) {
   const theme = useHostTheme();
   const nodeWidth = 132;
@@ -112,32 +251,42 @@ function FlowChart({
           />
         ))}
       </svg>
-      {layout.nodes.map((n) => (
-        <div
-          key={n.id}
-          style={{
-            position: "absolute",
-            left: n.x,
-            top: n.y,
-            width: nodeWidth,
-            height: nodeHeight,
-            boxSizing: "border-box",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: theme.bg.elevated,
-            border: `1px solid ${accentIds.has(n.id) ? theme.accent.primary : theme.stroke.primary}`,
-            borderRadius: 6,
-            padding: "0 6px",
-            fontSize: 11,
-            color: theme.text.primary,
-            textAlign: "center",
-            lineHeight: 1.2,
-          }}
-        >
-          {labels[n.id]}
-        </div>
-      ))}
+      {layout.nodes.map((n) => {
+        const selected = selectedId === n.id;
+        return (
+          <button
+            key={n.id}
+            type="button"
+            onClick={() => onSelect?.(n.id)}
+            style={{
+              position: "absolute",
+              left: n.x,
+              top: n.y,
+              width: nodeWidth,
+              height: nodeHeight,
+              boxSizing: "border-box",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: theme.bg.elevated,
+              border: `1px solid ${
+                selected || accentIds.has(n.id) ? theme.accent.primary : theme.stroke.primary
+              }`,
+              borderRadius: 6,
+              padding: "0 6px",
+              fontSize: 11,
+              color: theme.text.primary,
+              textAlign: "center",
+              lineHeight: 1.2,
+              cursor: onSelect ? "pointer" : "default",
+              appearance: "none",
+              fontFamily: "inherit",
+            }}
+          >
+            {labels[n.id]}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -531,9 +680,54 @@ function AttacksView({ mode }: { mode: Mode }) {
   );
 }
 
+function SimNetworkView() {
+  return (
+    <Stack gap={12}>
+      <H2>Host network</H2>
+      <Table
+        headers={["Listener", "Process", "Clients"]}
+        rows={[
+          ["127.0.0.1:8444 /", "opv-sim --serve", "Operator browser (injector)"],
+          ["127.0.0.1:8444 /api/tap", "SimRuntime", "ot-dashboard TAP client, GET only"],
+          ["127.0.0.1:8444 /api/control", "SimRuntime", "Arm / reset overlays"],
+          ["127.0.0.1:8444 /api/health", "SimRuntime", "mode + attack_id"],
+          ["in-memory CAN", "DeviceTwins + gateways", "No SocketCAN in this tree"],
+        ]}
+        striped
+      />
+      <Callout tone="danger" title="Sensor does not control the injector">
+        The watchstander on :8443 polls TAP. It must not POST /api/control.
+      </Callout>
+    </Stack>
+  );
+}
+
+function SimWorkflowsView() {
+  return (
+    <Stack gap={12}>
+      <H2>Active workflows</H2>
+      <Table
+        headers={["Workflow", "Status", "Path"]}
+        rows={[
+          ["Serve TAP + plant", "active", "uv run opv-sim --serve → tick 0.8 s → GET /api/tap"],
+          ["Injector UI", "active", "browser :8444 → POST /api/control"],
+          ["GPS spoof overlay", "active", "spoof → GNSS-1 129025/026/029 walk-off, DOPs healthy"],
+          ["Heading / SOG / PGN flood", "active", "gyro, velocity, pgn_flood toggles"],
+          ["Gateway allowlist", "active", "nav→prop heading/COG; RPM onto nav denied"],
+          ["Dev labels", "active", "in-memory LabelTopic; prod LABEL_TOPIC fatal"],
+          ["Linux vcan_* TAP", "spec", "Ship-shaped SocketCAN; CI uses InMemoryCanBus"],
+        ]}
+        rowTone={["success", "success", "success", "success", "success", "warning", "info"]}
+        striped
+      />
+    </Stack>
+  );
+}
+
 export default function Nmea2000OpvSimulatorArchitecture() {
   const [view, setView] = useCanvasState<View>("view", "topology");
   const [mode, setMode] = useCanvasState<Mode>("mode", "prod");
+  const [selectedService, setSelectedService] = useCanvasState("selectedService", "twins");
   const dispatch = useCanvasAction();
   const isDev = mode === "dev";
   const nodes = isDev ? [...SIM_NODES, DEV_LABEL_NODE] : SIM_NODES;
@@ -589,6 +783,12 @@ export default function Nmea2000OpvSimulatorArchitecture() {
         <Pill active={view === "gps"} onClick={() => setView("gps")}>
           GPS spoof
         </Pill>
+        <Pill active={view === "network"} onClick={() => setView("network")}>
+          Network
+        </Pill>
+        <Pill active={view === "workflows"} onClick={() => setView("workflows")}>
+          Workflows
+        </Pill>
         <Button
           variant="ghost"
           onClick={() =>
@@ -608,13 +808,21 @@ export default function Nmea2000OpvSimulatorArchitecture() {
         edges={edges}
         direction="vertical"
         accentIds={new Set(isDev ? ["twins", "gw", "sensor", "labels"] : ["twins", "gw", "sensor"])}
+        selectedId={selectedService}
+        onSelect={setSelectedService}
       />
       <Text size="small" tone="tertiary">
-        Accent-bordered nodes are device twins, isolating gateways, and the OT
-        sensor TAP sink
+        Click a service for its input/output schema. Accent-bordered nodes are
+        twins, gateways, and the OT sensor TAP sink
         {isDev ? ", plus the dev-only label topic" : ""}. Ground truth is never
         in-band CAN.
       </Text>
+      <Divider />
+      <H2>Data schema</H2>
+      <SchemaPanel
+        nodeId={selectedService}
+        label={SIM_NODES.concat(DEV_LABEL_NODE).find((n) => n.id === selectedService)?.label ?? selectedService}
+      />
       <Table
         headers={["Channel", "dev + sensor dev", "prod + sensor prod", "Ship"]}
         rows={[
@@ -630,6 +838,8 @@ export default function Nmea2000OpvSimulatorArchitecture() {
       {view === "devices" ? <DevicesView /> : null}
       {view === "attacks" ? <AttacksView mode={mode} /> : null}
       {view === "gps" ? <GpsSpoofView mode={mode} /> : null}
+      {view === "network" ? <SimNetworkView /> : null}
+      {view === "workflows" ? <SimWorkflowsView /> : null}
     </Stack>
   );
 }

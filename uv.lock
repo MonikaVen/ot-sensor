@@ -316,12 +316,25 @@ name = "opv-sim"
 version = "0.1.0"
 source = { editable = "simulator" }
 
+[package.optional-dependencies]
+ui = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", marker = "extra == 'ui'", specifier = ">=0.115" },
+    { name = "uvicorn", marker = "extra == 'ui'", specifier = ">=0.32" },
+]
+provides-extras = ["ui"]
+
 [[package]]
 name = "ot-lab"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "opv-sim" },
+    { name = "opv-sim", extra = ["ui"] },
     { name = "ot-sensor", extra = ["onnx", "ui"] },
 ]
 
@@ -333,7 +346,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "opv-sim", editable = "simulator" },
+    { name = "opv-sim", extras = ["ui"], editable = "simulator" },
     { name = "ot-sensor", extras = ["onnx", "ui"], editable = "ot-sensor" },
 ]
 

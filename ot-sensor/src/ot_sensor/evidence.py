@@ -150,14 +150,14 @@ class EvidenceEngine:
             for p in honeypot.closed:
                 honeypot.hold_paths.add(str(p))
                 pcap_refs.append({"kind": "honeypot-jsonl", "path": str(p), "role": "pcap_equivalent"})
-            if honeypot._path is not None:
-                honeypot.hold_paths.add(str(honeypot._path))
+            for path, seq in honeypot.open_files():
+                honeypot.hold_paths.add(str(path))
                 pcap_refs.append(
                     {
                         "kind": "honeypot-jsonl",
-                        "path": str(honeypot._path),
+                        "path": str(path),
                         "open": True,
-                        "seq": honeypot.seq,
+                        "seq": seq,
                         "role": "pcap_equivalent",
                     }
                 )

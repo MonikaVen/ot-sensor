@@ -1,17 +1,31 @@
-import { ack, control, fetchSnapshot } from "./api";
+import { ack, askAssistant, control, fetchAssistant, fetchSnapshot, updateRule } from "./api";
 import { assetMapSvg } from "./map";
-import type { Asset, Incident, Snapshot } from "./types";
+import { linePlot, plotColors } from "./plot";
+import type { Alert, Asset, AssistantSession, FlowMessage, HoneypotFeed, Incident, ModelPack, RuleClause, RulePack, Snapshot } from "./types";
 import "./styles.css";
 
 type Overlay = "comms" | "deps";
+type Page = "map" | "rules" | "models" | "correlation" | "honeypot" | "assistant";
+
+const SUGGESTED = [
+  "Why did this incident fire?",
+  "Which assets are affected, and what depends on them?",
+  "Is this more likely an attack or a sensor fault?",
+  "What should I check next without writing the bus?",
+];
 
 const state = {
   snap: null as Snapshot | null,
   error: null as string | null,
   overlay: "comms" as Overlay,
+  page: "map" as Page,
   selectedAsset: null as string | null,
   selectedIncident: null as string | null,
   toastId: null as string | null,
+  assistant: null as AssistantSession | null,
+  assistantDraft: "",
+  assistantBusy: false,
+  assistantError: null as string | null,
 };
 
 function esc(s: string): string {
@@ -28,7 +42,8 @@ function hoursUntil(iso: string): string {
 
 function tone(status: string): string {
   if (status === "ok" || status === "fired") return "ok";
-  if (status === "alert" || status === "llm_unavailable" || status === "model_unavailable") return "warn";
+  if (status === "alert" || status === "llm_unavailable" || status === "model_unavailable" || status === "down") return "warn";
+  if (status === "disabled") return "idle";
   return "idle";
 }
 
@@ -42,6 +57,452 @@ function healthHtml(snap: Snapshot): string {
     .join("")}</div>`;
 }
 
+function fmtLive(v: number | null | undefined, unit: string, type: string): string {
+  if (v == null || Number.isNaN(v)) return "live —";
+  if (type === "bool") return v >= 1 ? "live yes" : "live no";
+  const n = Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
+  return `live ${n}${unit ? " " + unit : ""}`;
+}
+
+function packStatus(pack: RulePack): string {
+  if (!pack.enabled) return "off";
+  if (pack.fired) return "fired";
+  return "quiet";
+}
+
+function oneRuleWidget(pack: RulePack): string {
+  const status = packStatus(pack);
+  const groups = pack.groups
+    .map((g) => {
+      const rows = g.clauses
+        .map((c) => {
+          const control =
+            c.type === "bool"
+              ? `<label class="toggle compact"><input type="checkbox" data-clause="${esc(c.id)}" ${c.value ? "checked" : ""}/> require</label>`
+              : `<input type="number" min="0" step="any" data-clause="${esc(c.id)}" value="${esc(String(c.value))}" />`;
+          return `<div class="clause ${c.met ? "met" : ""} ${g.id === "not" ? "suppress" : ""}">
+            <span class="clause-label">${esc(c.label)}</span>
+            <span class="op">${esc(c.op)}</span>
+            ${control}
+            <span class="unit">${esc(c.unit)}</span>
+            <span class="live" data-live="${esc(c.feature)}">${esc(fmtLive(c.live, c.unit, c.type))}</span>
+          </div>`;
+        })
+        .join("");
+      return `<div class="clause-group"><h3>${esc(g.label)}</h3>${rows}</div>`;
+    })
+    .join("");
+  return `<section class="rules-widget" data-rule-id="${esc(pack.rule_id)}">
+    <div class="rule-head">
+      <div>
+        <h2>${esc(pack.title)}</h2>
+        <p class="rule-title">${esc(pack.rule_id)} · v${esc(pack.version)}</p>
+        <p class="muted">${esc(pack.blurb)}</p>
+        <p class="muted">ATT&amp;CK ${esc(pack.techniques.join(" ") || "—")} · impact ${esc(pack.impacts.join(" ") || "—")}</p>
+      </div>
+      <div class="rule-head-actions">
+        <label class="toggle"><input type="checkbox" data-rule-enabled ${pack.enabled ? "checked" : ""}/> Enabled</label>
+        <label class="sev">Severity
+          <select data-rule-severity>
+            ${["info", "warning", "critical"].map((s) => `<option value="${s}" ${pack.severity === s ? "selected" : ""}>${s}</option>`).join("")}
+          </select>
+        </label>
+        <span class="rule-status ${status}">${status === "fired" ? "FIRED" : status === "off" ? "off" : "quiet"}</span>
+      </div>
+    </div>
+    ${groups}
+  </section>`;
+}
+
+function rulesPageHtml(snap: Snapshot): string {
+  const packs = snap.rules?.packs ?? [];
+  const body =
+    packs.length === 0
+      ? `<p class="muted">No rule packs available.</p>`
+      : packs.map(oneRuleWidget).join("");
+  return `<div class="map-col rules-col">
+    <div class="map-toolbar">
+      <h2>Rules</h2>
+      <p class="muted">Same feature window as ONNX. Settings survive Reset.</p>
+    </div>
+    ${body}
+  </div>`;
+}
+
+function fmtNum(v: number | null | undefined, digits = 2): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(digits);
+}
+
+function liveBox(live: boolean, fired?: boolean): string {
+  const cls = fired ? "hot" : live ? "" : "off";
+  const label = fired ? "detection" : live ? "live" : "not live";
+  return `<span class="live-box ${cls}" title="${label}"></span><span class="live-caption">${label}</span>`;
+}
+
+function fmtCoord(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return v.toFixed(5);
+}
+
+function clauseById(pack: RulePack, id: string): RuleClause | undefined {
+  for (const g of pack.groups) {
+    const hit = g.clauses.find((c) => c.id === id || c.feature === id);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function ruleMonitorPlot(pack: RulePack): string {
+  if (pack.rule_id === "gps-spoof-nav") return gpsSpoofMonitorPlot(pack);
+  const keys = pack.groups.flatMap((g) => g.clauses.filter((c) => c.type === "number").map((c) => ({ id: c.id, label: c.label, unit: c.unit })));
+  const pick = keys.slice(0, 4);
+  const rows = (pack.series ?? []).map((s) => {
+    const row: Record<string, number> = { t: s.t };
+    for (const k of pick) {
+      const live = s.values[k.id];
+      const thr = s.thresholds[k.id];
+      if (live != null) row[k.id] = live;
+      if (thr != null) row[`${k.id}__thr`] = thr;
+    }
+    return row;
+  });
+  const lines = pick.flatMap((k, i) => {
+    const color = plotColors(i);
+    return [
+      { key: k.id, color, label: `${k.label}${k.unit ? " " + k.unit : ""}` },
+      { key: `${k.id}__thr`, color, dash: true, label: `${k.label} thr` },
+    ];
+  });
+  const latest = pack.series?.[pack.series.length - 1];
+  const now = pick
+    .map((k) => {
+      const live = clauseById(pack, k.id)?.live ?? latest?.values[k.id];
+      const thr = latest?.thresholds[k.id] ?? clauseById(pack, k.id)?.value;
+      return `${esc(k.label)} ${fmtNum(live)}${k.unit} / thr ${fmtNum(typeof thr === "number" ? thr : Number(thr))}${k.unit}`;
+    })
+    .join(" · ");
+  return `${linePlot(rows, lines)}
+    <p class="plot-legend">${pick
+      .map((k, i) => `<span><i class="swatch" style="background:${plotColors(i)}"></i>${esc(k.label)}</span><span class="swatch-dash" style="border-color:${plotColors(i)}"></span> thr`)
+      .join("")}</p>
+    <p class="muted score-line">${now || "no numeric clauses"}</p>`;
+}
+
+function gpsSpoofMonitorPlot(pack: RulePack): string {
+  const splitC = clauseById(pack, "gnss1_gnss2_split_m");
+  const resC = clauseById(pack, "gnss_dr_residual_m");
+  const cogC = clauseById(pack, "cog_heading_residual_deg");
+  const hdopC = clauseById(pack, "hdop_healthy");
+  const satC = clauseById(pack, "sat_count_min");
+  const latest = pack.series?.[pack.series.length - 1];
+  const read = latest?.readings ?? {};
+  const liveSplit = splitC?.live ?? latest?.values.gnss1_gnss2_split_m ?? read.gnss1_gnss2_split_m;
+  const liveRes = resC?.live ?? latest?.values.gnss_dr_residual_m ?? read.gnss_dr_residual_m;
+  const splitThr = Number(splitC?.value ?? latest?.thresholds.gnss1_gnss2_split_m ?? 30);
+  const resThr = Number(resC?.value ?? latest?.thresholds.gnss_dr_residual_m ?? 50);
+  const cogThr = Number(cogC?.value ?? latest?.thresholds.cog_heading_residual_deg ?? 15);
+  const rows = (pack.series ?? []).map((s) => {
+    const split = s.values.gnss1_gnss2_split_m ?? s.readings?.gnss1_gnss2_split_m;
+    const residual = s.values.gnss_dr_residual_m ?? s.readings?.gnss_dr_residual_m;
+    const cog = s.values.cog_heading_residual_deg ?? s.readings?.cog_heading_residual_deg;
+    const crossed =
+      s.fired ||
+      (split != null && split > (s.thresholds.gnss1_gnss2_split_m ?? splitThr)) ||
+      (residual != null && residual > (s.thresholds.gnss_dr_residual_m ?? resThr));
+    return {
+      t: s.t,
+      split,
+      residual,
+      split_thr: s.thresholds.gnss1_gnss2_split_m ?? splitThr,
+      residual_thr: s.thresholds.gnss_dr_residual_m ?? resThr,
+      cog,
+      cog_thr: s.thresholds.cog_heading_residual_deg ?? cogThr,
+      detect: crossed ? split ?? residual : null,
+    };
+  });
+  if (rows.length && liveSplit != null) {
+    const last = rows[rows.length - 1];
+    last.split = liveSplit;
+    last.residual = liveRes ?? last.residual;
+    last.cog = cogC?.live ?? last.cog;
+    const crossed = pack.fired || (liveSplit > splitThr || (liveRes != null && liveRes > resThr));
+    last.detect = crossed ? liveSplit : last.detect;
+  }
+  const distPlot = linePlot(rows, [
+    { key: "split", color: "#3caf7a", label: "GNSS-1 vs GNSS-2" },
+    { key: "residual", color: "#c9a227", label: "GNSS vs DR" },
+    { key: "split_thr", color: "#3caf7a", dash: true, label: "split thr" },
+    { key: "residual_thr", color: "#c9a227", dash: true, label: "DR thr" },
+  ]);
+  const cogPlot = linePlot(rows, [
+    { key: "cog", color: "#3d8bfd", label: "COG vs heading" },
+    { key: "cog_thr", color: "#3d8bfd", dash: true, label: "thr" },
+  ]);
+  const lat1 = latest?.readings?.gnss1_lat_deg;
+  const lon1 = latest?.readings?.gnss1_lon_deg;
+  const lat2 = latest?.readings?.gnss2_lat_deg;
+  const lon2 = latest?.readings?.gnss2_lon_deg;
+  return `<dl class="live-readings">
+      <div><dt>GNSS-1</dt><dd>${fmtCoord(lat1)}, ${fmtCoord(lon1)}</dd></div>
+      <div><dt>GNSS-2</dt><dd>${fmtCoord(lat2)}, ${fmtCoord(lon2)}</dd></div>
+      <div><dt>Split</dt><dd>${fmtNum(liveSplit)} m / thr ${fmtNum(splitThr)} m</dd></div>
+      <div><dt>DR residual</dt><dd>${fmtNum(liveRes)} m / thr ${fmtNum(resThr)} m</dd></div>
+      <div><dt>HDOP</dt><dd>${fmtNum(hdopC?.live ?? latest?.readings?.hdop)} / &lt; ${fmtNum(Number(hdopC?.value))}</dd></div>
+      <div><dt>Sats</dt><dd>${fmtNum(satC?.live ?? latest?.readings?.sat_count)} / ≥ ${fmtNum(Number(satC?.value))}</dd></div>
+      <div><dt>COG vs heading</dt><dd>${fmtNum(cogC?.live ?? latest?.readings?.cog_heading_residual_deg)}° / thr ${fmtNum(cogThr)}°</dd></div>
+    </dl>
+    ${distPlot}
+    <p class="plot-legend"><span><i class="swatch" style="background:#3caf7a"></i>GNSS-1 vs GNSS-2 split</span><span><i class="swatch" style="background:#c9a227"></i>GNSS vs DR</span><span class="swatch-dash" style="border-color:#8b97a8"></span> threshold<span><i class="swatch" style="background:#d45b4c"></i>detection</span></p>
+    ${cogPlot}
+    <p class="plot-legend"><span><i class="swatch" style="background:#3d8bfd"></i>COG vs heading</span><span class="swatch-dash" style="border-color:#3d8bfd"></span> threshold</p>`;
+}
+
+function ruleStatusCard(pack: RulePack): string {
+  const live = Boolean(pack.live);
+  const status = packStatus(pack);
+  return `<section class="status-card ${live ? "live" : "idle"} ${pack.fired ? "detect" : ""}" data-monitor-rule="${esc(pack.rule_id)}">
+    <div class="status-card-head">
+      <div class="live-row">${liveBox(live, pack.fired)}</div>
+      <div>
+        <h2>${esc(pack.title)}</h2>
+        <p class="rule-title">${esc(pack.rule_id)} · v${esc(pack.version)}</p>
+      </div>
+      <span class="rule-status ${status}">${status === "fired" ? "FIRED" : status === "off" ? "off" : "quiet"}</span>
+    </div>
+    <p class="muted">${esc(pack.blurb)}</p>
+    ${ruleMonitorPlot(pack)}
+  </section>`;
+}
+
+function modelStatusCard(pack: ModelPack): string {
+  const live = Boolean(pack.live);
+  const status = pack.detected || pack.status === "fired" ? "fired" : live ? "quiet" : "off";
+  const rows = (pack.series ?? []).map((s) => {
+    const thr = s.threshold_fps ?? s.predicted_fps;
+    return {
+      t: s.t,
+      actual_fps: s.actual_fps,
+      threshold_fps: thr,
+      detect: s.fired || s.crossed ? s.actual_fps : null,
+    };
+  });
+  const plot = linePlot(rows, [
+    { key: "actual_fps", color: "#3caf7a", label: "actual" },
+    { key: "threshold_fps", color: "#3d8bfd", dash: true, label: "LSTM threshold" },
+  ]);
+  const s = pack.scores || {};
+  const thrNow = s.threshold_fps ?? s.predicted_fps ?? pack.thresholds.threshold_fps;
+  return `<section class="status-card ${live ? "live" : "idle"} ${pack.detected ? "detect" : ""}" data-monitor-model="${esc(pack.model_id)}">
+    <div class="status-card-head">
+      <div class="live-row">${liveBox(live, pack.detected)}</div>
+      <div>
+        <h2>${esc(pack.title)}</h2>
+        <p class="rule-title">${esc(pack.model_id)} · v${esc(pack.version)}${pack.onnx_loaded ? " · ONNX" : " · numpy LSTM"}</p>
+      </div>
+      <span class="rule-status ${status}">${pack.detected ? "FIRED" : live ? "live" : "idle"}</span>
+    </div>
+    <p class="muted">${esc(pack.blurb)}</p>
+    ${plot}
+    <p class="plot-legend"><span><i class="swatch" style="background:#3caf7a"></i>actual flow</span><span class="swatch-dash" style="border-color:#3d8bfd"></span> LSTM threshold<span><i class="swatch" style="background:#d45b4c"></i>detection</span></p>
+    <p class="muted score-line">actual ${fmtNum(s.actual_fps)} fps · threshold ${fmtNum(thrNow)} fps (LSTM) ${pack.detected ? "· crossed" : ""}</p>
+  </section>`;
+}
+
+function modelsPageHtml(snap: Snapshot): string {
+  const rules = snap.rules?.packs ?? [];
+  const models = snap.models?.packs ?? [];
+  return `<div class="models-page">
+    <div class="map-toolbar models-toolbar">
+      <h2>Model status</h2>
+      <p class="legend"><span class="swatch fill ok"></span> live <span class="swatch fill idle"></span> not live <span class="swatch fill bad"></span> detection</p>
+    </div>
+    <div class="models-grid">
+      <div class="models-col">
+        <h2>Rules applied</h2>
+        ${rules.length ? rules.map(ruleStatusCard).join("") : `<p class="muted">No rule packs.</p>`}
+      </div>
+      <div class="models-col">
+        <h2>ML models</h2>
+        ${models.length ? models.map(modelStatusCard).join("") : `<p class="muted">No deployed ONNX models.</p>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function scoreLine(scores: Record<string, number> | undefined): string {
+  if (!scores) return "—";
+  const keys = ["flood_score", "actual_fps", "threshold_fps", "predicted_fps", "residual_fps"];
+  const parts = keys
+    .filter((k) => scores[k] != null)
+    .map((k) => `${k.replace(/_fps$/, "").replace(/_/g, " ")} ${fmtNum(scores[k])}`);
+  const extra = Object.keys(scores)
+    .filter((k) => !keys.includes(k))
+    .slice(0, 4)
+    .map((k) => `${k} ${fmtNum(scores[k])}`);
+  return [...parts, ...extra].join(" · ") || "—";
+}
+
+function alertCard(alert: Alert): string {
+  const rules = (alert.rules ?? [])
+    .map(
+      (r) =>
+        `<li class="${r.fired ? "fired" : ""}"><span class="rule-status ${r.fired ? "fired" : "quiet"}">${r.fired ? "FIRED" : "quiet"}</span> ${esc(r.rule_id)}${r.severity ? ` · ${esc(r.severity)}` : ""}${r.clauses_fired?.length ? ` · ${esc(r.clauses_fired.join(", "))}` : ""}</li>`,
+    )
+    .join("");
+  const models = (alert.models ?? [])
+    .map(
+      (m) =>
+        `<li class="${m.fired ? "fired" : ""}"><span class="rule-status ${m.fired ? "fired" : "quiet"}">${m.fired ? "FIRED" : esc(m.status)}</span> ${esc(m.model_id)} v${esc(m.version)} · ${esc(scoreLine(m.scores))}</li>`,
+    )
+    .join("");
+  const fired = [...(alert.fired_rules ?? []), ...(alert.fired_models ?? [])];
+  return `<article class="alert-card ${fired.length ? "hot" : ""}">
+    <div class="alert-head">
+      <span class="inc-id">${esc(alert.event_id)}</span>
+      <span class="inc-risk">${esc(fmtClock(alert.timestamp))} · ${esc(alert.segment || "—")}${alert.join_incomplete ? " · join incomplete" : ""}</span>
+    </div>
+    <p class="muted">${esc((alert.asset_ids || []).join(", ") || "no assets")} · ${fired.length ? esc(fired.join(" · ")) : "enrichment only"}</p>
+    <h3>Rules</h3>
+    ${rules ? `<ul class="alert-hits">${rules}</ul>` : `<p class="muted">No rule hits on this window.</p>`}
+    <h3>Models</h3>
+    ${models ? `<ul class="alert-hits">${models}</ul>` : `<p class="muted">No model scores on this window.</p>`}
+  </article>`;
+}
+
+function correlationPageHtml(snap: Snapshot): string {
+  const incidents = snap.incidents ?? [];
+  const selected =
+    incidents.find((i) => i.incident_id === state.selectedIncident) ?? incidents[0] ?? null;
+  const list =
+    incidents.length === 0
+      ? `<p class="muted">No correlated cases yet. Alerts appear after ONNX and rules write the same event_id.</p>`
+      : `<ul class="inc-list">${incidents
+          .map(
+            (i) => `<li><button type="button" class="inc-row ${selected?.incident_id === i.incident_id ? "sel" : ""} ${i.state === "closed" ? "idle" : ""}" data-incident="${esc(i.incident_id)}">
+              <span class="inc-id">${esc(i.incident_id)} · ${esc(i.state)}${i.risk.nis2_significant ? " · NIS2" : ""}</span>
+              <span class="inc-title">${esc(i.title)}</span>
+              <span class="inc-risk">${esc(i.severity)} · risk ${i.risk.total} · ${i.alert_count} alert${i.alert_count === 1 ? "" : "s"} · ${(i.families || []).join(" · ") || i.segment}</span>
+            </button></li>`,
+          )
+          .join("")}</ul>`;
+  const memberAlerts = selected?.alerts ?? [];
+  const feed = memberAlerts.length ? memberAlerts : snap.alerts ?? [];
+  const alertBody =
+    feed.length === 0
+      ? `<p class="muted">No joined alerts. Correlation waits until enrichment finishes.</p>`
+      : feed.map(alertCard).join("");
+  return `<div class="models-page correlation-page">
+    <div class="map-toolbar models-toolbar">
+      <h2>Correlation</h2>
+      <p class="muted">Join ONNX + rules by event_id, then fold alerts into incidents. SLM text is not a detection.</p>
+    </div>
+    <div class="models-grid">
+      <div class="models-col">
+        <h2>Incidents</h2>
+        ${list}
+        ${selected ? caseHtml(selected, snap.copilot) : ""}
+      </div>
+      <div class="models-col">
+        <h2>${selected ? `Alerts in ${esc(selected.incident_id)}` : "Alerts"}</h2>
+        ${alertBody}
+      </div>
+    </div>
+  </div>`;
+}
+
+function fmtBytes(n: number | null | undefined): string {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  return `${(v / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function canHex(id: number): string {
+  return "0x" + (id >>> 0).toString(16).padStart(8, "0");
+}
+
+function honeypotPageHtml(snap: Snapshot): string {
+  const hp = snap.honeypot;
+  const feed = hp?.feed ?? [];
+  const files = hp?.entries ?? [];
+  const series = (hp?.series ?? []).map((s) => ({ t: s.t, bytes: s.bytes, files: s.files }));
+  const filesPlot = linePlot(series, [{ key: "files", color: "#c9a227", label: "files" }], {
+    formatY: (v) => String(Math.max(0, Math.round(v))),
+  });
+  const bytesPlot = linePlot(
+    series,
+    [{ key: "bytes", color: "#3d8bfd", label: "bytes" }],
+    {
+      formatY: (v) => {
+        if (v >= 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)}M`;
+        if (v >= 1024) return `${(v / 1024).toFixed(1)}K`;
+        return `${Math.round(v)}`;
+      },
+    },
+  );
+  const fileRows =
+    files.length === 0
+      ? `<p class="muted">No files on disk yet.</p>`
+      : `<table class="hp-table"><thead><tr><th>When</th><th>File</th><th>Size</th><th></th></tr></thead><tbody>${files
+          .slice()
+          .reverse()
+          .map(
+            (f) => `<tr class="${f.open ? "open" : ""}">
+              <td>${esc(fmtClock(f.t))}</td>
+              <td class="hex">${esc(f.name)}</td>
+              <td>${esc(fmtBytes(f.bytes))}</td>
+              <td>${f.open ? "open" : "closed"}</td>
+            </tr>`,
+          )
+          .join("")}</tbody></table>`;
+  const feedRows =
+    feed.length === 0
+      ? `<p class="muted">No units yet. Collector writes every TAP inflow before N2K convert.</p>`
+      : `<ol class="hp-feed">${feed
+          .map((u) => feedItemHtml(u))
+          .join("")}</ol>`;
+  return `<div class="models-page honeypot-page">
+    <div class="map-toolbar models-toolbar">
+      <h2>Honeypot</h2>
+      <p class="muted">Live collector feed. Rotate/retain cap applies. Delete removes logs only — not incidents.</p>
+      <button type="button" class="btn danger" data-ctrl="clear-honeypot">Delete all data</button>
+    </div>
+    <dl class="hp-stats">
+      <div><dt>Dataset</dt><dd>${esc(fmtBytes(hp?.bytes))}</dd></div>
+      <div><dt>Open / closed</dt><dd>${esc(fmtBytes(hp?.bytes_open))} / ${esc(fmtBytes(hp?.bytes_closed))}</dd></div>
+      <div><dt>Files</dt><dd>${hp?.files ?? 0}</dd></div>
+      <div><dt>Units written</dt><dd>${hp?.written ?? 0}</dd></div>
+      <div><dt>Rotations</dt><dd>${hp?.rotation ?? 0}</dd></div>
+      <div><dt>Dropped</dt><dd>${hp?.dropped ?? 0}</dd></div>
+    </dl>
+    <div class="models-grid">
+      <div class="models-col">
+        <h2>File count</h2>
+        ${filesPlot}
+        <h2>Bytes</h2>
+        ${bytesPlot}
+        <h2>On disk</h2>
+        ${fileRows}
+      </div>
+      <div class="models-col">
+        <h2>Live feed</h2>
+        ${feedRows}
+      </div>
+    </div>
+  </div>`;
+}
+
+function feedItemHtml(u: HoneypotFeed): string {
+  const kind = u.kind || "unknown";
+  const id = u.can_id != null ? ` · ${canHex(u.can_id)}` : "";
+  const hex = u.payload_hex || "";
+  return `<li class="kind-${esc(kind)}${u.error ? " err" : ""}">
+    <div class="meta">${esc(fmtClock(u.t))} · ${esc(u.segment)}${u.iface ? ` · ${esc(u.iface)}` : ""} · ${esc(kind)} · seq ${esc(String(u.seq))} · ${esc(String(u.nbytes))} B${id}</div>
+    <div class="hex">${esc(hex)}</div>
+  </li>`;
+}
+
 function kv(rows: Array<[string, string]>): string {
   return `<dl class="kv">${rows
     .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`)
@@ -49,26 +510,90 @@ function kv(rows: Array<[string, string]>): string {
 }
 
 function caseHtml(inc: Incident, copilot: Snapshot["copilot"]): string {
+  const slmSrc = inc.copilot ?? (copilot && copilot.incident_id === inc.incident_id ? copilot : null);
   const nis2 = inc.nis2
     ? `<div class="nis2"><h3>NIS2 clocks</h3>
         <p>Early warning (24h): ${esc(hoursUntil(inc.nis2.early_warning_due))}</p>
         <p>Notification (72h): ${esc(hoursUntil(inc.nis2.notification_due))}</p>
         <p>Human confirm: ${inc.nis2.human_confirm ? "yes" : "required before CSIRT"}</p></div>`
     : "";
-  const slm = copilot && copilot.incident_id === inc.incident_id ? `<p class="muted">SLM ${esc(copilot.status)}</p>` : "";
+  const slm = slmSrc
+    ? `<div class="slm-block"><p class="muted">SLM ${esc(slmSrc.status)}</p>${inc.body || slmSrc.alert_body ? `<p class="toast-body">${esc(inc.body || slmSrc.alert_body)}</p>` : ""}</div>`
+    : "";
   return `<section class="case">
     <h2>${esc(inc.incident_id)}</h2>
     <p class="case-title">${esc(inc.title)}</p>
     ${kv([
-      ["Criticality", String(inc.risk.max_criticality)],
-      ["Risk", String(inc.risk.total)],
+      ["State", inc.state],
+      ["Severity", inc.severity],
+      ["Risk", `${inc.risk.total} (impact ${inc.risk.impact} · likelihood ${inc.risk.likelihood} · blast ${inc.risk.blast_radius} · control ${inc.risk.control_plane})`],
       ["Segment", inc.segment],
       ["Assets", inc.asset_ids.join(", ")],
+      ["Alerts", String(inc.alert_count)],
+      ["Family", (inc.families || []).join(" · ") || "—"],
       ["ATT&CK", inc.techniques.join(" ") || "—"],
       ["Impact", inc.impacts.join(" ") || "—"],
     ])}
     ${nis2}${slm}
   </section>`;
+}
+
+function assistantPageHtml(snap: Snapshot): string {
+  const incidents = snap.incidents ?? [];
+  const selected =
+    incidents.find((i) => i.incident_id === state.selectedIncident) ?? incidents[0] ?? null;
+  const list =
+    incidents.length === 0
+      ? `<p class="muted">No correlated cases yet. The assistant waits for the correlator.</p>`
+      : `<ul class="inc-list">${incidents
+          .map(
+            (i) => `<li><button type="button" class="inc-row ${selected?.incident_id === i.incident_id ? "sel" : ""} ${i.state === "closed" ? "idle" : ""}" data-incident="${esc(i.incident_id)}">
+              <span class="inc-id">${esc(i.incident_id)} · ${esc(i.state)}</span>
+              <span class="inc-title">${esc(i.title)}</span>
+              <span class="inc-risk">${esc(i.severity)} · risk ${i.risk.total} · ${i.alert_count} alert${i.alert_count === 1 ? "" : "s"}</span>
+            </button></li>`,
+          )
+          .join("")}</ul>`;
+  const sess = state.assistant && selected && state.assistant.incident_id === selected.incident_id ? state.assistant : null;
+  const loaded = snap.assistant?.loaded || sess?.loaded;
+  const status = sess?.status || snap.assistant?.status || "idle";
+  const source = sess?.source ? ` · ${sess.source}` : "";
+  const interp = sess?.interpretation
+    ? `<div class="assistant-brief">${esc(sess.interpretation)}</div>`
+    : `<p class="muted">${state.assistantBusy ? "Interpreting incident…" : "Select a case to load a CyberPal briefing."}</p>`;
+  const chat = (sess?.messages ?? [])
+    .map(
+      (m) => `<li class="${m.role}"><div class="meta">${esc(m.role)}</div><div class="body">${esc(m.content)}</div></li>`,
+    )
+    .join("");
+  const suggestions = SUGGESTED.map((q) => `<button type="button" class="btn" data-ask="${esc(q)}">${esc(q)}</button>`).join("");
+  return `<div class="models-page assistant-page">
+    <div class="map-toolbar models-toolbar">
+      <h2>Assistant</h2>
+      <p class="muted">CyberPal 2.0-4B · one session per incident · correlation JSON only · listen-only</p>
+      <span class="rule-status ${loaded ? "" : "off"}">${esc(status)}${esc(source)}</span>
+      <button type="button" class="btn" data-ctrl="assistant-refresh" ${selected ? "" : "disabled"}>Re-interpret</button>
+    </div>
+    ${state.assistantError ? `<p class="banner">${esc(state.assistantError)}</p>` : ""}
+    <div class="models-grid assistant-grid">
+      <div class="models-col">
+        <h2>Incidents</h2>
+        ${list}
+        ${selected ? caseHtml(selected, snap.copilot) : ""}
+      </div>
+      <div class="models-col assistant-col">
+        <h2>Interpretation</h2>
+        ${interp}
+        <h2>Investigation</h2>
+        <ol class="assistant-chat">${chat || `<li class="muted">Ask about this case. Session stays on ${esc(selected?.incident_id || "—")}.</li>`}</ol>
+        <div class="assistant-suggest">${suggestions}</div>
+        <form class="assistant-form" data-assistant-form>
+          <textarea name="q" rows="3" placeholder="Investigation question…" ${selected ? "" : "disabled"}>${esc(state.assistantDraft)}</textarea>
+          <button type="submit" class="btn primary" ${!selected || state.assistantBusy ? "disabled" : ""}>${state.assistantBusy ? "Thinking…" : "Ask"}</button>
+        </form>
+      </div>
+    </div>
+  </div>`;
 }
 
 function assetCard(asset: Asset): string {
@@ -79,16 +604,24 @@ function assetCard(asset: Asset): string {
       ["Segment", asset.segment],
       ["Criticality", String(asset.criticality)],
       ["NIS2 service", asset.nis2_service || "none"],
-      ["Live", asset.live ? "talking" : "not seen"],
+      ["Live", asset.traffic === "attack" ? "attack" : asset.traffic === "benign" ? "talking" : "no communication"],
+      ["Expected", asset.expected ? "OPV model" : "unexpected"],
+      ["Detected", (asset.detected_via || []).join(", ") || "—"],
       ["PGNs", asset.channels_seen.join(", ") || "—"],
     ])}
   </section>`;
 }
 
-function sideHtml(snap: Snapshot): string {
+function fmtClock(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toISOString().replace("T", " ").replace(/\.\d+Z$/, "Z");
+}
+
+function incidentsHtml(snap: Snapshot): string {
   const inc =
     snap.incidents.find((i) => i.incident_id === state.selectedIncident) ?? snap.incidents[0] ?? null;
-  const asset = snap.assets.find((a) => a.asset_id === state.selectedAsset) ?? null;
   const list =
     snap.incidents.length === 0
       ? `<p class="muted">No correlated cases. Detections join here, not as raw alerts.</p>`
@@ -101,10 +634,39 @@ function sideHtml(snap: Snapshot): string {
             </button></li>`,
           )
           .join("")}</ul>`;
-  return `<aside class="side">
-    <section><h2>Incidents</h2>${list}</section>
+  return `<section class="incidents-panel">
+    <h2>Incidents</h2>
+    ${list}
     ${inc ? caseHtml(inc, snap.copilot) : ""}
-    ${asset ? assetCard(asset) : ""}
+  </section>`;
+}
+
+function flowHtml(snap: Snapshot): string {
+  const asset = snap.flow_asset ?? { asset_id: "16", name: "GNSS-1" };
+  const msgs: FlowMessage[] = snap.message_flow ?? [];
+  const started = snap.attack_started_at;
+  const rows =
+    msgs.length === 0
+      ? `<li class="muted">Waiting for TAP frames from ${esc(asset.name)}.</li>`
+      : msgs
+          .map(
+            (m) => `<li class="${m.spoofed ? "spoofed" : ""}">
+              <div class="meta">${esc(fmtClock(m.t))} · ${esc(m.segment)} · SA ${esc(m.sa)} ${esc(m.name)}${m.spoofed ? " · SPOOF" : ""}</div>
+              <div><strong>PGN ${esc(String(m.pgn))}</strong> ${esc(m.pgn_name)}</div>
+              <div>${esc(m.summary)}</div>
+              <div class="hex">${esc(m.hex)}</div>
+            </li>`,
+          )
+          .join("");
+  const selected = snap.assets.find((a) => a.asset_id === state.selectedAsset) ?? null;
+  return `<aside class="side">
+    <section class="flow-head">
+      <h2>Spoof flow</h2>
+      <p class="flow-asset">${esc(asset.name)} · SA ${esc(asset.asset_id)}</p>
+      <p class="attack-start ${started ? "set" : ""}">Attack started <strong>${esc(started ? fmtClock(started) : "not yet")}</strong></p>
+    </section>
+    <ol id="flow-log">${rows}</ol>
+    ${selected ? assetCard(selected) : ""}
   </aside>`;
 }
 
@@ -129,7 +691,7 @@ function render(): void {
   root.innerHTML = `<div class="shell">
     <header class="top">
       <div>
-        <p class="kicker">Listen-only · NMEA 2000</p>
+        <p class="kicker">Listen-only · NMEA 2000${snap?.tap_url ? ` · TAP ${esc(snap.tap_url)}` : ""}</p>
         <h1>OT sensor</h1>
       </div>
       <dl class="top-stats">
@@ -140,30 +702,60 @@ function render(): void {
         <div><dt>Cases</dt><dd>${snap?.stats.open_incidents ?? 0}</dd></div>
       </dl>
       <div class="controls">
-        <button type="button" class="btn primary" data-ctrl="${snap?.running ? "pause" : "start"}">${snap?.running ? "Pause" : "Start"}</button>
-        <button type="button" class="btn" data-ctrl="reset-spoof">Reset spoof</button>
-        <button type="button" class="btn" data-ctrl="reset-underway">Reset underway</button>
+        <div class="seg page-tabs">
+          <button type="button" class="btn ${state.page === "map" ? "active" : ""}" data-page="map">Map</button>
+          <button type="button" class="btn ${state.page === "rules" ? "active" : ""}" data-page="rules">Rules</button>
+          <button type="button" class="btn ${state.page === "models" ? "active" : ""}" data-page="models">Models</button>
+          <button type="button" class="btn ${state.page === "correlation" ? "active" : ""}" data-page="correlation">Correlation</button>
+          <button type="button" class="btn ${state.page === "honeypot" ? "active" : ""}" data-page="honeypot">Honeypot</button>
+          <button type="button" class="btn ${state.page === "assistant" ? "active" : ""}" data-page="assistant">Assistant</button>
+        </div>
+        <button type="button" class="btn primary" data-ctrl="reset">Reset</button>
       </div>
     </header>
     ${snap ? healthHtml(snap) : ""}
+    ${snap?.tap_error ? `<p class="banner">Simulator TAP ${esc(snap.tap_url || "")}: ${esc(snap.tap_error)}</p>` : ""}
     ${state.error ? `<p class="banner">${esc(state.error)} — start with ot-dashboard on :8443</p>` : ""}
-    <div class="main">
-      <div class="map-col">
+    <div class="main ${state.page === "rules" ? "rules-page" : ""} ${state.page === "models" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant" ? "models-page-main" : ""}">
+      ${
+        state.page === "rules"
+          ? snap
+            ? rulesPageHtml(snap)
+            : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
+          : state.page === "models"
+            ? snap
+              ? modelsPageHtml(snap)
+              : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
+          : state.page === "correlation"
+            ? snap
+              ? correlationPageHtml(snap)
+              : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
+          : state.page === "honeypot"
+            ? snap
+              ? honeypotPageHtml(snap)
+              : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
+          : state.page === "assistant"
+            ? snap
+              ? assistantPageHtml(snap)
+              : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
+          : `<div class="map-col">
         <div class="map-toolbar">
           <h2>Asset map</h2>
           <div class="seg">
             <button type="button" class="btn ${state.overlay === "comms" ? "active" : ""}" data-overlay="comms">Communications</button>
             <button type="button" class="btn ${state.overlay === "deps" ? "active" : ""}" data-overlay="deps">Dependencies</button>
           </div>
-          <p class="legend"><span class="swatch ok"></span> expected <span class="swatch bad"></span> violation <span class="swatch dep"></span> depends_on</p>
+          <p class="legend"><span class="swatch fill ok"></span> benign <span class="swatch fill bad"></span> attack <span class="swatch fill idle"></span> silent <span class="swatch ok"></span> comms <span class="swatch bad"></span> violation <span class="swatch dep"></span> depends_on</p>
         </div>
         ${
           snap
             ? assetMapSvg(snap.assets, snap.comms, snap.dependencies, state.overlay, state.selectedAsset)
             : `<p class="muted">Waiting for TAP snapshot…</p>`
         }
+        ${snap ? incidentsHtml(snap) : ""}
       </div>
-      ${snap ? sideHtml(snap) : ""}
+      ${snap ? flowHtml(snap) : ""}`
+      }
     </div>
     ${toast ? toastHtml(toast) : ""}
   </div>`;
@@ -176,9 +768,17 @@ async function dismissToast(): Promise<void> {
   if (id) await ack([id]);
 }
 
-async function runControl(action: string, attack?: string): Promise<void> {
+async function runControl(action: string): Promise<void> {
   try {
-    state.snap = await control(action, attack);
+    if (action === "reset") {
+      state.selectedAsset = null;
+      state.selectedIncident = null;
+      state.toastId = null;
+      state.assistant = null;
+      state.assistantDraft = "";
+      state.assistantError = null;
+    }
+    state.snap = await control(action);
     state.error = null;
     render();
   } catch (e) {
@@ -204,6 +804,13 @@ function bind(): void {
   root.addEventListener("click", (ev) => {
     const t = eventEl(ev);
     if (!t) return;
+    const page = dataAttr(t.closest("[data-page]"), "page");
+    if (page === "map" || page === "rules" || page === "models" || page === "correlation" || page === "honeypot" || page === "assistant") {
+      state.page = page;
+      render();
+      if (page === "assistant") void loadAssistant();
+      return;
+    }
     const overlay = dataAttr(t.closest("[data-overlay]"), "overlay");
     if (overlay === "comms" || overlay === "deps") {
       state.overlay = overlay;
@@ -211,16 +818,23 @@ function bind(): void {
       return;
     }
     const ctrl = dataAttr(t.closest("[data-ctrl]"), "ctrl");
-    if (ctrl === "start" || ctrl === "pause") {
-      void runControl(ctrl);
+    if (ctrl === "reset") {
+      void runControl("reset");
       return;
     }
-    if (ctrl === "reset-spoof") {
-      void runControl("reset", "gps-spoof-primary");
+    if (ctrl === "clear-honeypot") {
+      if (!window.confirm("Delete all honeypot logs?")) return;
+      void runControl("clear_honeypot");
       return;
     }
-    if (ctrl === "reset-underway") {
-      void runControl("reset", "");
+    if (ctrl === "assistant-refresh") {
+      void loadAssistant(true);
+      return;
+    }
+    const ask = dataAttr(t.closest("[data-ask]"), "ask");
+    if (ask) {
+      state.assistantDraft = ask;
+      void sendAssistant(ask);
       return;
     }
     const assetId = dataAttr(t.closest("[data-asset]"), "asset");
@@ -235,11 +849,13 @@ function bind(): void {
     if (incidentId) {
       state.selectedIncident = incidentId;
       render();
+      if (state.page === "assistant") void loadAssistant();
       return;
     }
     const toastAct = dataAttr(t.closest("[data-toast]"), "toast");
     if (toastAct === "open" && state.toastId) {
       state.selectedIncident = state.toastId;
+      state.page = "correlation";
       void dismissToast();
       return;
     }
@@ -247,6 +863,148 @@ function bind(): void {
       void dismissToast();
     }
   });
+  root.addEventListener("submit", (ev) => {
+    if (!eventEl(ev)?.closest("[data-assistant-form]")) return;
+    ev.preventDefault();
+    void sendAssistant();
+  });
+  root.addEventListener("change", (ev) => {
+    const t = eventEl(ev);
+    const widget = t?.closest(".rules-widget");
+    const ruleId = widget?.getAttribute("data-rule-id");
+    if (!t || !widget || !ruleId) return;
+    if (t instanceof HTMLInputElement && t.hasAttribute("data-rule-enabled")) {
+      void saveRule(ruleId, { enabled: t.checked });
+      return;
+    }
+    if (t instanceof HTMLSelectElement && t.hasAttribute("data-rule-severity")) {
+      void saveRule(ruleId, { severity: t.value });
+      return;
+    }
+    if (t instanceof HTMLInputElement && t.hasAttribute("data-clause")) {
+      const id = t.getAttribute("data-clause");
+      if (!id) return;
+      const val = t.type === "checkbox" ? t.checked : Number(t.value);
+      if (t.type !== "checkbox" && Number.isNaN(Number(val))) return;
+      void saveRule(ruleId, { clauses: { [id]: val } });
+    }
+  });
+  root.addEventListener("input", (ev) => {
+    const t = eventEl(ev);
+    if (t instanceof HTMLTextAreaElement && t.closest("[data-assistant-form]")) {
+      state.assistantDraft = t.value;
+      return;
+    }
+    if (!(t instanceof HTMLInputElement) || t.type !== "number" || !t.hasAttribute("data-clause")) return;
+    const widget = t.closest(".rules-widget");
+    const ruleId = widget?.getAttribute("data-rule-id");
+    const id = t.getAttribute("data-clause");
+    if (!ruleId || !id) return;
+    const val = Number(t.value);
+    if (Number.isNaN(val)) return;
+    queueClause(ruleId, id, val);
+  });
+}
+
+function editingRule(): boolean {
+  const el = document.activeElement;
+  return el instanceof Element && !!el.closest(".rules-widget");
+}
+
+function patchRuleLive(snap: Snapshot): void {
+  for (const pack of snap.rules?.packs ?? []) {
+    const widget = document.querySelector(`.rules-widget[data-rule-id="${CSS.escape(pack.rule_id)}"]`);
+    if (!widget) continue;
+    const status = packStatus(pack);
+    const statusEl = widget.querySelector(".rule-status");
+    if (statusEl) {
+      statusEl.className = `rule-status ${status}`;
+      statusEl.textContent = status === "fired" ? "FIRED" : status;
+    }
+    for (const g of pack.groups) {
+      for (const c of g.clauses) {
+        const live = widget.querySelector(`[data-live="${CSS.escape(c.feature)}"]`);
+        if (live) live.textContent = fmtLive(c.live, c.unit, c.type);
+        const input = widget.querySelector(`[data-clause="${CSS.escape(c.id)}"]`);
+        const row = input?.closest(".clause");
+        if (row) row.classList.toggle("met", Boolean(c.met));
+      }
+    }
+  }
+}
+
+async function saveRule(
+  ruleId: string,
+  partial: { enabled?: boolean; severity?: string; clauses?: Record<string, number | boolean> },
+): Promise<void> {
+  try {
+    state.snap = await updateRule({ rule_id: ruleId, ...partial });
+    state.error = null;
+    if (editingRule()) patchRuleLive(state.snap);
+    else render();
+  } catch (e) {
+    state.error = e instanceof Error ? e.message : "rules update failed";
+    render();
+  }
+}
+
+let ruleTimer = 0;
+function queueClause(ruleId: string, id: string, value: number | boolean): void {
+  window.clearTimeout(ruleTimer);
+  ruleTimer = window.setTimeout(() => {
+    void saveRule(ruleId, { clauses: { [id]: value } });
+  }, 280);
+}
+
+function editingAssistant(): boolean {
+  const el = document.activeElement;
+  return el instanceof Element && !!el.closest(".assistant-page");
+}
+
+async function loadAssistant(refresh = false): Promise<void> {
+  const id = state.selectedIncident ?? state.snap?.incidents[0]?.incident_id ?? null;
+  if (!id) {
+    state.assistant = null;
+    render();
+    return;
+  }
+  state.selectedIncident = id;
+  if (!refresh && state.assistant?.incident_id === id && state.assistant.interpretation && !state.assistantBusy) {
+    render();
+    return;
+  }
+  state.assistantBusy = true;
+  render();
+  try {
+    const sess = await fetchAssistant(id, refresh);
+    if (sess.ok === false) throw new Error(sess.error || "unknown incident");
+    state.assistant = sess;
+    state.assistantError = null;
+  } catch (e) {
+    state.assistantError = e instanceof Error ? e.message : "assistant failed";
+  }
+  state.assistantBusy = false;
+  render();
+}
+
+async function sendAssistant(preset?: string): Promise<void> {
+  const id = state.selectedIncident;
+  const q = (preset ?? state.assistantDraft).trim();
+  if (!id || !q || state.assistantBusy) return;
+  state.assistantBusy = true;
+  state.assistantDraft = "";
+  render();
+  try {
+    const sess = await askAssistant(id, q);
+    if (sess.ok === false) throw new Error(sess.error || "ask failed");
+    state.assistant = sess;
+    state.assistantError = null;
+  } catch (e) {
+    state.assistantError = e instanceof Error ? e.message : "ask failed";
+    state.assistantDraft = q;
+  }
+  state.assistantBusy = false;
+  render();
 }
 
 async function pull(): Promise<void> {
@@ -256,7 +1014,27 @@ async function pull(): Promise<void> {
     state.error = null;
     state.toastId = state.toastId ?? next.new_incident_ids[0] ?? null;
     state.selectedIncident = state.selectedIncident ?? next.incidents[0]?.incident_id ?? null;
+    if (editingRule()) {
+      patchRuleLive(next);
+      return;
+    }
+    if (state.page === "assistant" && (editingAssistant() || state.assistantBusy)) {
+      return;
+    }
+    const y =
+      state.page === "rules"
+        ? (document.querySelector(".map-col")?.scrollTop ?? 0)
+        : state.page === "models" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant"
+          ? (document.querySelector(".main")?.scrollTop ?? 0)
+          : 0;
     render();
+    if (state.page === "rules") {
+      const col = document.querySelector(".map-col");
+      if (col) col.scrollTop = y;
+    } else if (state.page === "models" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant") {
+      const main = document.querySelector(".main");
+      if (main) main.scrollTop = y;
+    }
   } catch (e) {
     state.error = e instanceof Error ? e.message : "snapshot failed";
     render();

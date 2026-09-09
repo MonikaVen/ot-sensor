@@ -1,0 +1,22 @@
+# CyberPal 2.0-4B investigation assistant. Not a detector.
+# Official cyber-pal-security/CyberPal2.0-4B is not published (20B only).
+# Lab loads a 4B Qwen3 Instruct GGUF via local Ollama (loopback).
+
+model_id: cyberpal-2.0-4b
+version: 1.0.0
+runtime: ollama
+ollama_model: cyberpal-2.0-4b
+file: model.gguf
+quant: Q4_K_M
+params_b: 4
+ctx: 4096
+max_new_tokens: 512
+timeout_s: 90
+fail: closed
+prod_network: deny
+no_ground_truth: true
+no_raw_can: true
+no_honeypot_blobs: true
+hardware:
+  ram_gb_min: 8
+  gpu: optional

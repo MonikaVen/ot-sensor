@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from otlab import OTEvent
 from otlab.geo import haversine_m
+
+# Vessel model SAs from asset-criticality.yaml. Anything else is unexpected.
+EXPECTED_SAS = frozenset({"0", "1", "12", "16", "17", "20", "24", "35", "52", "56", "60", "99"})
+RECENT_S = 5.0
 
 
 @dataclass
@@ -60,6 +63,15 @@ class FeatureStage:
         if cog is not None and hdg is not None:
             cog_hdg = abs((cog - hdg + 180) % 360 - 180)
         frames_per_s = len(events) / dt
+        cutoff = t1 - timedelta(seconds=RECENT_S)
+        recent = [e for e in events if e.timestamp >= cutoff] or events[-20:]
+        dt_r = 0.2
+        if len(recent) > 1:
+            dt_r = max(0.2, (recent[-1].timestamp - recent[0].timestamp).total_seconds())
+        iso_n = sum(1 for e in recent if e.object_address == "59904")
+        ctrl_n = sum(1 for e in recent if e.object_address == "127237")
+        hdg_n = sum(1 for e in recent if e.object_address == "127250")
+        unexpected = {e.source_asset_id for e in recent if e.source_asset_id and e.source_asset_id not in EXPECTED_SAS}
         feat = {
             "bus_load_pct": min(100.0, frames_per_s / 1500.0 * 100.0),
             "frames_per_s_norm": frames_per_s / 1500.0,
@@ -76,7 +88,25 @@ class FeatureStage:
             "cog_heading_residual_deg": cog_hdg,
             "heading_rot_consistent": 1.0,
             "sat_count_drop": 0.0,
+            "iso_request_count": float(iso_n),
+            "iso_request_per_s": iso_n / dt_r,
+            "heading_control_count": float(ctrl_n),
+            "heading_pgn_per_s": hdg_n / dt_r,
+            "unexpected_talker_count": float(len(unexpected)),
+            "recent_frames_per_s": len(recent) / dt_r,
         }
+        if lat1 is not None:
+            feat["gnss1_lat_deg"] = float(lat1)
+        if lon1 is not None:
+            feat["gnss1_lon_deg"] = float(lon1)
+        if lat2 is not None:
+            feat["gnss2_lat_deg"] = float(lat2)
+        if lon2 is not None:
+            feat["gnss2_lon_deg"] = float(lon2)
+        if cog is not None:
+            feat["cog_deg"] = float(cog)
+        if hdg is not None:
+            feat["heading_deg"] = float(hdg)
         return FeatureWindow(
             event_id=str(uuid.uuid4()),
             t_start=t0,

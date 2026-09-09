@@ -33,7 +33,9 @@ class LocalSlm:
         self.has_weights = bool(gguf and gguf.exists())
 
     def assess(self, inc: Incident) -> CopilotAssessment:
-        rule = inc.alerts[-1].rules[0].rule_id if inc.alerts and inc.alerts[-1].rules else "model"
+        last_rules = inc.alerts[-1].rules if inc.alerts else []
+        fired = [r for r in last_rules if r.fired]
+        rule = (fired[0].rule_id if fired else last_rules[0].rule_id) if last_rules else (inc.families[0] if inc.families else "model")
         fallback_title = f"{inc.severity} {rule} on assets {','.join(inc.asset_ids)}; risk {inc.risk.total}"
         if not self.has_weights:
             return CopilotAssessment(
