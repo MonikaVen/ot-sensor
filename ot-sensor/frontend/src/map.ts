@@ -44,7 +44,7 @@ function mid(a: Pt, b: Pt): Pt {
 }
 
 function commsBad(e: CommsEdge): boolean {
-  return e.kind === "violation" || Boolean(e.issue);
+  return Boolean(e.issue);
 }
 
 function edgeCaption(p: Pt, e: CommsEdge): string {
@@ -102,7 +102,7 @@ export function assetMapSvg(
         const col = SEGMENTS.indexOf(e.segment as (typeof SEGMENTS)[number]);
         const bx = PAD_X + (col >= 0 ? col : 0) * COL_W + COL_W / 2;
         const b = { x: bx, y: 36 };
-        const cls = bad ? "edge-bad" : "edge-bus";
+        const cls = bad ? "edge-bad" : e.expected ? "edge-ok" : "edge-bus";
         edges += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" class="${cls}" />`;
         captions += edgeCaption({ x: (a.x + b.x) / 2, y: a.y - 26 }, e);
         return;

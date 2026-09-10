@@ -35,10 +35,6 @@ FLOW_MAX = 100
 LOG_MAX = 3000
 MONITOR_MAX = 90
 HP_HIST_MAX = 90
-CHANGE_ISSUE = {
-    "gateway_bypass": "Gateway bypass",
-    "new_edge": "Unexpected talker",
-}
 
 
 def _iso(v):
@@ -346,16 +342,9 @@ class LabRuntime:
             )
 
         live_edges = []
-        src_issue = {
-            str(c.get("src")): CHANGE_ISSUE[c["change"]]
-            for c in sensor.graph.changes
-            if c.get("change") in CHANGE_ISSUE and c.get("src") is not None
-        }
         for edge in sensor.graph.edges.values():
             st = self.edge_tick.get(_edge_key(edge.src, edge.dst, edge.segment), {})
             issue = st.get("issue")
-            if not issue and not edge.expected:
-                issue = src_issue.get(str(edge.src), "Unexpected talker")
             live_edges.append(
                 {
                     "src": edge.src,
