@@ -82,6 +82,24 @@ SA_NAME = {
     "99": "decoy",
 }
 
+ATTACK_LABEL = {k: label for k, label, *_rest in ATTACK_CATALOG}
+KIND_TO_ATTACK = {
+    "spoof": "spoof",
+    "ais": "ais",
+    "gyro": "gyro",
+    "rot": "rot",
+    "velocity": "velocity",
+    "rpm": "rpm",
+    "depth": "depth",
+    "battery": "battery",
+    "read": "read",
+    "write": "write",
+    "engine": "engine_cmd",
+    "error": "error_flood",
+    "rogue": "rogue_master",
+    "bypass": "gateway_bypass",
+}
+FLOOD_KEYS = ("read_flood", "write_flood", "pgn_flood", "fast_packet", "error_flood")
 TRACK_MAX = 180
 HIST_MAX = 240
 LOG_MAX = 3000
@@ -220,6 +238,8 @@ def _hist_series(items) -> list[dict]:
             row = {"t": item.get("t"), "v": round(float(item["v"]), 5)}
             if item.get("sa") not in (None, ""):
                 row["sa"] = str(item["sa"])
+            if item.get("tick") is not None:
+                row["tick"] = int(item["tick"])
             out.append(row)
         else:
             out.append({"v": round(float(item), 5)})
@@ -383,17 +403,31 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
         burst = True
     if technique is None and kind != "ok":
         technique = ATTACK_TECHNIQUES.get(kind)
+    attack_key = ""
+    if kind == "flood" or (kind == "read" and on.get("read_flood")) or (kind == "write" and on.get("write_flood")):
+        attack_key = next((k for k in FLOOD_KEYS if on.get(k)), "pgn_flood")
+    elif kind == "spoof" and on.get("spoof_both"):
+        attack_key = "spoof_both"
+    elif kind in KIND_TO_ATTACK:
+        attack_key = KIND_TO_ATTACK[kind]
+    elif spoofed:
+        attack_key = next((k for k, v in on.items() if v), "")
+    pgn_name = PGN_NAME.get(pgn, f"PGN {pgn}")
     return {
         "sa": sa,
         "name": SA_NAME.get(sa, f"SA {sa}"),
         "pgn": pgn,
-        "pgn_name": PGN_NAME.get(pgn, f"PGN {pgn}"),
+        "pgn_name": pgn_name,
+        "command": f"PGN {pgn} {pgn_name}",
         "segment": frame.segment,
         "summary": _summary(fields),
         "hex": frame.data.hex(),
+        "can_id": f"{int(frame.can_id):08X}",
         "spoofed": spoofed,
         "kind": kind,
         "technique": technique,
+        "attack_key": attack_key,
+        "attack_label": ATTACK_LABEL.get(attack_key, "benign" if kind == "ok" and not spoofed else (kind or "attack")),
         "hz": frequency,
         "burst": burst,
         "error": bool(frame.error),
@@ -532,7 +566,7 @@ class SimRuntime:
         self.devices[sa] = bool(enabled)
         self.sim.twins.set_device(sa, enabled)
 
-    def _record_hist(self, frames) -> None:
+    def _record_hist(self, frames, tick_n: int) -> None:
         decoded = [decode_fields(f) for f in frames]
         ts = _iso(getattr(frames[0], "t", None)) if frames else None
         if not ts:
@@ -542,7 +576,9 @@ class SimRuntime:
             if not samples:
                 continue
             side = "attack" if self.attacks.get(key) else "benign"
-            self.hist[key][side].extend({"t": ts, "v": float(v), "sa": str(sa)} for v, sa in samples)
+            self.hist[key][side].extend(
+                {"t": ts, "tick": tick_n, "v": float(v), "sa": str(sa)} for v, sa in samples
+            )
 
     def histogram_payload(self) -> list[dict]:
         return [
@@ -565,11 +601,14 @@ class SimRuntime:
         plant, frames = self.sim.tick(self.elapsed, attacks=self.attacks, frequency=self.frequency)
         self.plant = plant
         self.last_frames = frames
-        self._record_hist(frames)
+        tick_n = self.ticks + 1
+        self._record_hist(frames, tick_n)
         for f in frames:
-            self.log_archive.append(emission_row(f, plant, self.attacks, self.frequency))
+            row = emission_row(f, plant, self.attacks, self.frequency)
+            row["tick"] = tick_n
+            self.log_archive.append(row)
         self.elapsed += 1.0
-        self.ticks += 1
+        self.ticks = tick_n
         if plant is not None:
             self.track.append(
                 {

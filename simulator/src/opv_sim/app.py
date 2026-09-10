@@ -55,7 +55,7 @@ async def _tick_loop() -> None:
     while True:
         if runtime.running:
             await asyncio.to_thread(runtime.tick)
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.25)
 
 
 class ControlBody(BaseModel):

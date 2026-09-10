@@ -66,7 +66,7 @@ Open http://127.0.0.1:8444
 
 Frequency (1–32 Hz) sizes flood bursts and repeats spoofed talker rows in the attack log. Check **Randomize** to pick a new Hz each tick; moving the slider turns randomize off and locks that rate. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).
 
-The right rail is the live message log. **Plots** is a header tab beside Start/Pause. One collective live chart shows benign plus each named attack (samples/tick). Filter by overlay and device, then **Export CSV** (header and Plots toolbar) to save the series and filtered frames.
+The right rail is the live message log. **Plots** is a header tab beside Start/Pause. One collective chart updates every plant tick (benign plus each named attack). **Export CSV** saves each NMEA 2000 command (`PGN …`) with its attack label (`benign`, `GNSS-1 spoof`, …).
 
 Attach the sensor:
 

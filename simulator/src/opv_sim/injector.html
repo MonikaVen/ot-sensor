@@ -252,7 +252,7 @@
     </header>
     <section id="plots-page" aria-label="Plots">
       <div class="plots-toolbar">
-        <p class="hint">Live collective plot: benign plus each named attack. Filter by overlay and talker, then export CSV.</p>
+        <p class="hint">Live frames/tick: benign plus each named attack. Export CSV writes each NMEA 2000 command with its attack label.</p>
         <label for="plot-attack">Attack
           <select id="plot-attack">
             <option value="all">All attacks</option>
@@ -280,7 +280,7 @@
         <div class="plots-table-wrap">
           <table class="plots-table">
             <thead>
-              <tr><th>Time</th><th>Kind</th><th>Talker</th><th>PGN</th><th>Name</th><th>Technique</th><th>Summary</th><th>Hex</th></tr>
+              <tr><th>Time</th><th>Attack</th><th>Command</th><th>Talker</th><th>Technique</th><th>Summary</th><th>Hex</th></tr>
             </thead>
             <tbody id="plots-log-body"></tbody>
           </table>
@@ -608,21 +608,6 @@
         return { attack: attack ? attack.value : "all", device: device ? device.value : "all" };
       }
       const ATTACK_COLORS = ["#d45b4c", "#c9a227", "#3d8bfd", "#9b7ed9", "#e07a70", "#5ec8d8", "#d4a017", "#8b97a8", "#f08c6e", "#6aa4ff"];
-      function sampleMatchesDevice(item, device) {
-        if (device === "all") return true;
-        const sa = item && typeof item === "object" ? String(item.sa || "") : "";
-        return !sa || sa === device;
-      }
-      function countByTime(series, device) {
-        const map = new Map();
-        for (const item of series || []) {
-          if (!sampleMatchesDevice(item, device)) continue;
-          const t = item && typeof item === "object" && item.t ? item.t : "";
-          if (!t) continue;
-          map.set(t, (map.get(t) || 0) + 1);
-        }
-        return map;
-      }
       function csvEscape(v) {
         const s = v == null ? "" : String(v);
         return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -642,31 +627,55 @@
         const p = (n) => String(n).padStart(2, "0");
         return `${prefix}-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
       }
-      function collectiveData(s) {
+      function logMatches(row, attack, device) {
+        if (device !== "all" && String(row.sa) !== device) return false;
+        if (attack === "all") return true;
+        if (row.attack_key === attack) return true;
+        if (!row.attack_key || row.attack_label === "benign" || row.kind === "ok") return true;
+        const kinds = ATTACK_KINDS[attack];
+        return kinds ? kinds.includes(row.kind) : false;
+      }
+      function filteredLogs(s) {
         const { attack, device } = plotFilter();
-        const overlays = (s.histograms || []).filter((h) => attack === "all" || h.key === attack);
-        const benignMap = new Map();
-        for (const h of overlays) {
-          for (const [t, n] of countByTime(h.benign, device)) {
-            benignMap.set(t, (benignMap.get(t) || 0) + n);
+        return (s.log_archive || []).filter((row) => logMatches(row, attack, device));
+      }
+      function collectiveData(s) {
+        const rows = filteredLogs(s);
+        const byTick = new Map();
+        const labels = new Map([["benign", { key: "benign", label: "benign", color: "#3caf7a", active: true }]]);
+        const catalog = s.attack_catalog || [];
+        catalog.forEach((d, i) => {
+          labels.set(d.label, { key: d.key, label: d.label, color: ATTACK_COLORS[i % ATTACK_COLORS.length], active: !!(s.attacks || {})[d.key] });
+        });
+        for (const row of rows) {
+          const tick = row.tick != null ? Number(row.tick) : Date.parse(row.t || "") || 0;
+          let bucket = byTick.get(tick);
+          if (!bucket) {
+            bucket = { tick, t: row.t || "", counts: {} };
+            byTick.set(tick, bucket);
+          }
+          const label = row.attack_label || (row.kind && row.kind !== "ok" ? row.kind : "benign");
+          bucket.counts[label] = (bucket.counts[label] || 0) + 1;
+          if (!labels.has(label)) {
+            labels.set(label, { key: row.attack_key || label, label, color: ATTACK_COLORS[labels.size % ATTACK_COLORS.length], active: true });
           }
         }
-        const attacks = overlays.map((h, i) => ({
-          key: h.key,
-          label: h.label,
-          active: !!h.active,
-          color: ATTACK_COLORS[i % ATTACK_COLORS.length],
-          byT: countByTime(h.attack, device),
-        })).filter((a) => attack !== "all" || a.active || [...a.byT.values()].some((n) => n > 0));
-        const times = [...new Set([...benignMap.keys(), ...attacks.flatMap((a) => [...a.byT.keys()])])]
-          .filter(Boolean)
-          .sort();
+        const tickNums = [...byTick.keys()].sort((a, b) => a - b);
+        const used = ["benign", ...catalog.map((d) => d.label).filter((lab) => tickNums.some((t) => (byTick.get(t).counts[lab] || 0) > 0))];
+        const extra = [...labels.keys()].filter((lab) => lab !== "benign" && !used.includes(lab) && tickNums.some((t) => (byTick.get(t).counts[lab] || 0) > 0));
+        const seriesIds = [...used, ...extra];
         return {
-          times,
-          series: [
-            { key: "benign", label: "benign", color: "#3caf7a", values: times.map((t) => benignMap.get(t) || 0) },
-            ...attacks.map((a) => ({ key: a.key, label: a.label, color: a.color, active: a.active, values: times.map((t) => a.byT.get(t) || 0) })),
-          ],
+          times: tickNums.map((tick) => String(tick)),
+          series: seriesIds.map((lab) => {
+            const meta = labels.get(lab) || { key: lab, label: lab, color: "#8b97a8" };
+            return {
+              key: meta.key,
+              label: meta.label,
+              color: meta.color,
+              active: meta.active,
+              values: tickNums.map((tick) => byTick.get(tick).counts[lab] || 0),
+            };
+          }),
         };
       }
       function linePlotSvg(times, series) {
@@ -697,8 +706,8 @@
         const yLabels = ticks.map((v) =>
           `<text x="${padL - 6}" y="${yAt(v) + 3}" text-anchor="end" fill="#8b97a8" font-size="10">${fmt(v)}</text>`
         ).join("");
-        const t0 = (times[0] || "").replace("T", " ").slice(11, 19);
-        const t1 = (times[times.length - 1] || "").replace("T", " ").slice(11, 19);
+        const t0 = times.length ? `tick ${times[0]}` : "";
+        const t1 = times.length ? `tick ${times[times.length - 1]}` : "";
         return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Collective live plot">
           <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="#2a3340" />
           <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="#2a3340" />
@@ -708,17 +717,6 @@
           <text x="${padL}" y="${h - 8}" fill="#8b97a8" font-size="10">${esc(t0)}</text>
           <text x="${w - padR}" y="${h - 8}" text-anchor="end" fill="#8b97a8" font-size="10">${esc(t1)}</text>
         </svg>`;
-      }
-      function logMatches(row, attack, device) {
-        if (device !== "all" && String(row.sa) !== device) return false;
-        if (attack === "all") return true;
-        const kinds = ATTACK_KINDS[attack];
-        if (!kinds) return true;
-        return kinds.includes(row.kind);
-      }
-      function filteredLogs(s) {
-        const { attack, device } = plotFilter();
-        return (s.log_archive || []).filter((row) => logMatches(row, attack, device));
       }
       function renderPlotLogs(s) {
         const body = document.getElementById("plots-log-body");
@@ -732,17 +730,18 @@
             : "No frames for this attack and device filter.";
         }
         if (!shown.length) {
-          body.innerHTML = `<tr><td colspan="8" class="hex">No frames for this filter. Start the plant or widen Attack / Device.</td></tr>`;
+          body.innerHTML = `<tr><td colspan="7" class="hex">No frames for this filter. Start the plant or widen Attack / Device.</td></tr>`;
           return;
         }
         body.innerHTML = shown.map((m) => {
           const attack = (m.kind && m.kind !== "ok") || m.spoofed;
+          const label = m.attack_label || (attack ? m.kind : "benign");
+          const command = m.command || `PGN ${m.pgn} ${m.pgn_name || ""}`;
           return `<tr class="${attack ? "attack" : ""}">
             <td>${esc((m.t || "").replace("T", " ").slice(0, 19))}</td>
-            <td>${esc(m.kind || "ok")}</td>
+            <td>${esc(label)}</td>
+            <td>${esc(command)}</td>
             <td>SA ${esc(m.sa)} ${esc(m.name || "")}</td>
-            <td>PGN ${esc(m.pgn)}</td>
-            <td>${esc(m.pgn_name || "")}</td>
             <td>${esc(m.technique || "")}</td>
             <td>${esc(m.summary || "")}</td>
             <td class="hex">${esc(m.hex || "")}</td>
@@ -765,24 +764,33 @@
         if (meta) {
           const n = data.times.length;
           meta.textContent = n
-            ? `samples/tick · ${n} tick${n === 1 ? "" : "s"} · ${data.series.length} series`
+            ? `frames/tick · ${n} live tick${n === 1 ? "" : "s"} · ${data.series.length} series`
             : "Waiting for plant ticks…";
         }
         if (live) live.textContent = `${s.running ? "live" : "paused"} · tick ${s.ticks ?? 0}`;
         renderPlotLogs(s);
       }
-      function plotsCsv(s) {
-        const data = collectiveData(s);
-        const headers = ["t", ...data.series.map((ln) => ln.label)];
-        const rows = data.times.map((t, i) => [t, ...data.series.map((ln) => ln.values[i])]);
-        return toCsv(headers, rows);
-      }
       function logsCsv(s) {
         const rows = filteredLogs(s).map((m) => [
-          m.t || "", m.kind || "ok", m.sa, m.name || "", m.pgn, m.pgn_name || "",
-          m.segment || "", m.technique || "", m.spoofed ? "true" : "false", m.summary || "", m.hex || "",
+          m.t || "",
+          m.tick != null ? m.tick : "",
+          m.attack_label || (m.kind && m.kind !== "ok" ? m.kind : "benign"),
+          m.command || `PGN ${m.pgn} ${m.pgn_name || ""}`,
+          m.pgn,
+          m.pgn_name || "",
+          m.sa,
+          m.name || "",
+          m.segment || "",
+          m.technique || "",
+          m.kind || "ok",
+          m.summary || "",
+          m.hex || "",
+          m.can_id || "",
         ]);
-        return toCsv(["t", "kind", "sa", "name", "pgn", "pgn_name", "segment", "technique", "spoofed", "summary", "hex"], rows);
+        return toCsv(
+          ["t", "tick", "attack_label", "command", "pgn", "pgn_name", "sa", "name", "segment", "technique", "kind", "summary", "hex", "can_id"],
+          rows,
+        );
       }
       function setPage(page) {
         const plots = page === "plots";
@@ -961,8 +969,7 @@
       function exportCsv() {
         if (!lastSnap) return;
         if (!document.body.classList.contains("plots-open")) setPage("plots");
-        downloadCsv(stamp("opv-sim-plots"), plotsCsv(lastSnap));
-        window.setTimeout(() => downloadCsv(stamp("opv-sim-logs"), logsCsv(lastSnap)), 120);
+        downloadCsv(stamp("opv-sim-nmea"), logsCsv(lastSnap));
       }
       document.getElementById("export-csv").onclick = exportCsv;
       document.getElementById("export-plots").onclick = exportCsv;
@@ -987,7 +994,7 @@
         try { apply(await snap()); } catch (e) { document.getElementById("note").textContent = e.message; }
       }
       pull();
-      setInterval(pull, 250);
+      setInterval(pull, 200);
     </script>
   </body>
 </html>

@@ -47,7 +47,14 @@ def test_snapshot_emissions_name_talkers():
     assert "16" in sas and "0" in sas
     gnss = next(r for r in rows if r["sa"] == "16" and r["pgn"] == 129025)
     assert gnss["name"] == "GNSS-1"
+    assert gnss["attack_label"] == "GNSS-1 spoof"
+    assert gnss["command"].startswith("PGN 129025")
     assert "lat" in gnss["summary"]
+    archive = rt.snapshot()["log_archive"]
+    hit = next(r for r in archive if r["sa"] == "16" and r["pgn"] == 129025)
+    assert hit["tick"] == 1
+    assert hit["attack_label"] == "GNSS-1 spoof"
+    assert any(r["attack_label"] == "benign" and r["command"].startswith("PGN ") for r in archive)
     plant = rt.snapshot()["plant"]
     assert plant["lat_deg"] is not None and plant["lon_deg"] is not None
     assert plant["sog_kn"] > 0 and plant["sog_ms"] > 0
