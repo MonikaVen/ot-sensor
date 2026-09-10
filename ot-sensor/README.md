@@ -48,9 +48,10 @@ OTLAB_SLM_MODEL=qwen2:latest uv run ot-dashboard --mode dev --port 8443 --sim-ur
 
 ## Install
 
-Python **3.12**. From the **repo root**:
+**[uv](https://docs.astral.sh/uv/)** from the **repo root**. Do not use `pip` or a virtualenv.
 
 ```bash
+uv python install 3.12
 uv sync --package ot-sensor --extra onnx --extra ui
 ```
 

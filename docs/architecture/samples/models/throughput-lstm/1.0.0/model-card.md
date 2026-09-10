@@ -31,3 +31,9 @@ Bytewax must apply the same `normalize` divisors as `config.yaml` (`frames_per_s
 ## Training data
 
 Synthetic sequences generated in `export.py`: benign vs flood labels. No MITRE or vessel recordings in this sample.
+
+Re-export with uv (not pip / venv):
+
+```bash
+uv run --no-project --with torch --with onnx --with 'numpy<2' python docs/architecture/samples/models/throughput-lstm/export.py
+```

@@ -14,13 +14,15 @@ The simulator is **NMEA 2000 only** (in-memory CAN in this tree; Linux `vcan_*` 
 
 ## Install
 
-Python **3.12**. From the repo root:
+**[uv](https://docs.astral.sh/uv/)** is the Python package manager for this lab. Do not use `pip`, `python -m venv`, or `source .venv/bin/activate`. Every Python command is `uv sync` / `uv run` from the repo root.
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv python install 3.12
 uv sync
 ```
 
-That creates `.venv` and installs both workspace packages (sensor extras `onnx` and `ui` included) plus pytest.
+`uv sync` installs both workspace packages (sensor extras `onnx` and `ui`) plus the `dev` group (pytest, httpx). Then:
 
 ```bash
 uv run opv-sim --help

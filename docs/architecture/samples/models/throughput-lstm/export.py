@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Train a tiny LSTM on synthetic N2K bus-load windows and export ONNX.
 
-Requires Python 3.12+ with torch (CPU). Example:
+Requires Python 3.12+ with torch (CPU). Use uv (not pip / venv):
 
-    python3.12 -m venv .venv && .venv/bin/pip install 'torch' 'onnx' 'numpy<2'
-    .venv/bin/python export.py
+    uv run --no-project --with torch --with onnx --with 'numpy<2' python export.py
 """
 
 from __future__ import annotations

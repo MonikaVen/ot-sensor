@@ -3,9 +3,12 @@
 Runnable **simulator** and **sensor** for the OPV architecture. Specs remain [nmea2000-opv-simulator.md](./nmea2000-opv-simulator.md) and [ot-sensor-nmea2000.md](./ot-sensor-nmea2000.md).
 
 ```
+uv python install 3.12
 uv sync
 uv run pytest -q
 ```
+
+uv is the Python package manager (`uv sync`, `uv run`). Do not use `pip` or `python -m venv`.
 
 CI uses an **in-memory CAN bus** (`InMemoryCanBus`), not SocketCAN. Frame bytes and `segment` tags are the same contract as `vcan_*`. SocketCAN remains the ship TAP; it is not required to test services.
 

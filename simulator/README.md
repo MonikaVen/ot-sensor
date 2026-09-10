@@ -23,9 +23,10 @@ NMEA 2000 only. No Modbus slave, no 0183 talker.
 
 ## Install
 
-Python **3.12**. From the **repo root**:
+**[uv](https://docs.astral.sh/uv/)** from the **repo root**. Do not use `pip` or a virtualenv.
 
 ```bash
+uv python install 3.12
 uv sync --package opv-sim
 ```
 
