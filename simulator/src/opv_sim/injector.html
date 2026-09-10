@@ -22,8 +22,13 @@
         font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       }
       * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden; }
       body { display: flex; flex-direction: column; }
+      header {
+        display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between;
+        align-items: flex-end; padding: 16px 20px; border-bottom: 1px solid var(--stroke);
+        background: var(--panel); flex-shrink: 0;
+      }
       header {
         display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between;
         align-items: flex-end; padding: 16px 20px; border-bottom: 1px solid var(--stroke);
@@ -37,7 +42,7 @@
       .ownship-globe { position: relative; width: 132px; height: 132px; flex-shrink: 0; }
       #own-globe { width: 132px; height: 132px; display: block; }
       .ownship-readout { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: flex-start; }
-      .ownship-readout dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; margin: 0; min-width: 340px; }
+      .ownship-readout dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 28px; margin: 0; min-width: 0; }
       .ownship-readout dd { font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; letter-spacing: 0.01em; }
       .ownship-readout .hot dd { color: var(--bad); }
       .ownship h2 { margin: 0 0 6px; }
@@ -58,8 +63,11 @@
         padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
       }
       button.primary { border-color: var(--accent); color: var(--accent); }
-      .workspace { display: grid; grid-template-columns: 1fr 340px; min-height: 0; flex: 1; }
-      .backbone { padding: 16px 20px; overflow: auto; }
+      .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); min-height: 0; flex: 1; }
+      .main-col {
+        display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto;
+      }
+      .backbone { padding: 16px 20px; overflow: visible; flex-shrink: 0; }
       .note { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
       .ok { color: var(--ok); }
       a { color: var(--accent); }
@@ -102,7 +110,7 @@
       }
       .bus-log {
         border-left: 1px solid var(--stroke); background: var(--panel);
-        display: flex; flex-direction: column; min-height: 0;
+        display: flex; flex-direction: column; min-height: 0; height: 100%;
       }
       .bus-log h2 { padding: 12px 14px 0; }
       #log { list-style: none; margin: 0; padding: 8px 0 16px; overflow: auto; flex: 1; }
@@ -117,16 +125,18 @@
       #log .hex { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 10px; }
       .row-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
       footer.bottom {
-        display: grid; grid-template-columns: 1.7fr 0.8fr; gap: 0;
+        display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 220px); gap: 0;
         border-top: 1px solid var(--stroke); background: var(--panel); flex-shrink: 0;
       }
-      .box { padding: 12px 16px 16px; }
+      .box { padding: 12px 12px 14px; min-width: 0; }
       .box + .box { border-left: 1px solid var(--stroke); }
-      .toggles { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+      .toggles { display: flex; flex-wrap: wrap; gap: 6px 8px; }
       .switch {
-        display: flex; align-items: center; gap: 8px; font-size: 12px;
-        border: 1px solid var(--stroke); padding: 6px 10px; background: var(--bg); cursor: pointer;
+        display: flex; align-items: center; gap: 6px; font-size: 11px;
+        border: 1px solid var(--stroke); padding: 4px 8px; background: var(--bg); cursor: pointer;
       }
+      #attacks .toggles { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 6px; }
+      #devices .toggles { display: flex; flex-direction: column; flex-wrap: nowrap; }
       .switch input { accent-color: var(--ok); width: 16px; height: 16px; }
       .switch.attack input { accent-color: var(--bad); }
       .switch small { color: var(--muted); font-size: 10px; }
@@ -134,7 +144,7 @@
         display: flex; align-items: center; gap: 12px; margin: 0 0 10px;
         font-size: 12px; color: var(--muted);
       }
-      .freq label { display: flex; align-items: center; gap: 8px; min-width: 150px; }
+      .freq label { display: flex; align-items: center; gap: 8px; min-width: 110px; }
       .freq output { color: var(--bad); font-variant-numeric: tabular-nums; font-weight: 600; }
       .freq input[type="range"] { flex: 1; accent-color: var(--bad); height: 4px; }
       @keyframes flash {
@@ -148,10 +158,12 @@
       @keyframes trunkpulse { 0% { filter: brightness(2.2); } 100% { filter: brightness(1); } }
       @keyframes slide { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
       @media (max-width: 980px) {
+        html, body { overflow: auto; }
         .workspace { grid-template-columns: 1fr; }
-        .bus-log { min-height: 220px; }
+        .bus-log { min-height: 45vh; height: 45vh; }
         footer.bottom { grid-template-columns: 1fr; }
         .box + .box { border-left: 0; border-top: 1px solid var(--stroke); }
+        #devices .toggles { flex-direction: row; flex-wrap: wrap; }
       }
     </style>
   </head>
@@ -179,6 +191,7 @@
       </div>
     </header>
     <div class="workspace">
+      <div class="main-col">
       <div class="backbone">
         <p class="note" id="note"></p>
         <div class="arch">
@@ -236,61 +249,62 @@
           </section>
         </div>
       </div>
+      <footer class="bottom">
+        <section class="box" id="attacks">
+          <h2>Attacks</h2>
+          <div class="freq">
+            <label for="hz">Frequency <output id="hz-out">16</output> Hz</label>
+            <input type="range" id="hz" min="1" max="32" step="1" value="16" />
+          </div>
+          <div class="toggles">
+            <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002 · 129025</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="spoof_both" /> GNSS-1+2 spoof <small>T1692.002 · gps-spoof-both</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="ais" /> AIS spoof <small>T1692.002 · 129038</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="gyro" /> Gyro spoof <small>T1692.002 · 127250</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="rot" /> ROT spoof <small>T1692.002 · 127251</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="velocity" /> Velocity spoof <small>T1692.002 · 129026 SOG</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="rpm" /> RPM spoof <small>T1692.002 · 127488</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="depth" /> Depth spoof <small>T1692.002 · 128267</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="battery" /> Battery spoof <small>T1692.002 · 127508</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="read" /> Read <small>T0801 · ISO Request 59904</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="write" /> Write <small>T1692.001 · T0855 · 127237</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="engine_cmd" /> Engine command <small>T1692.001 · 126208</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="read_flood" /> Read flood <small>T0814 · ISO Request burst</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="write_flood" /> Write flood <small>T0814 · 127237 burst</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="pgn_flood" /> PGN flood <small>T0814 · heading burst</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="error_flood" /> Error flood <small>T0814 · error frames</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="fast_packet" /> Fast Packet flood <small>T0814 · 129029</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="rogue_master" /> Rogue Master <small>T0848 · SA 16 theft</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="gateway_bypass" /> Gateway bypass <small>T1692 · RPM on nav</small></label>
+          </div>
+        </section>
+        <section class="box" id="devices">
+          <h2>Devices</h2>
+          <div class="toggles" id="device-toggles"></div>
+        </section>
+      </footer>
+      <section class="ownship" aria-label="Own ship">
+        <div class="ownship-globe">
+          <svg id="own-globe" viewBox="0 0 132 132" aria-label="Globe"></svg>
+        </div>
+        <div class="ownship-readout">
+          <div>
+            <h2>Own ship</h2>
+            <dl id="own-stats">
+              <div><dt>Latitude</dt><dd>—</dd></div>
+              <div><dt>Longitude</dt><dd>—</dd></div>
+              <div><dt>Velocity</dt><dd>—</dd></div>
+              <div><dt>Gyro heading</dt><dd>—</dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+      </div>
       <aside class="bus-log">
         <h2>Emitted messages</h2>
         <ol id="log"></ol>
       </aside>
     </div>
-    <footer class="bottom">
-      <section class="box" id="attacks">
-        <h2>Attacks</h2>
-        <div class="freq">
-          <label for="hz">Frequency <output id="hz-out">16</output> Hz</label>
-          <input type="range" id="hz" min="1" max="32" step="1" value="16" />
-        </div>
-        <div class="toggles">
-          <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002 · 129025</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="spoof_both" /> GNSS-1+2 spoof <small>T1692.002 · gps-spoof-both</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="ais" /> AIS spoof <small>T1692.002 · 129038</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="gyro" /> Gyro spoof <small>T1692.002 · 127250</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="rot" /> ROT spoof <small>T1692.002 · 127251</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="velocity" /> Velocity spoof <small>T1692.002 · 129026 SOG</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="rpm" /> RPM spoof <small>T1692.002 · 127488</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="depth" /> Depth spoof <small>T1692.002 · 128267</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="battery" /> Battery spoof <small>T1692.002 · 127508</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="read" /> Read <small>T0801 · ISO Request 59904</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="write" /> Write <small>T1692.001 · T0855 · 127237</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="engine_cmd" /> Engine command <small>T1692.001 · 126208</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="read_flood" /> Read flood <small>T0814 · ISO Request burst</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="write_flood" /> Write flood <small>T0814 · 127237 burst</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="pgn_flood" /> PGN flood <small>T0814 · heading burst</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="error_flood" /> Error flood <small>T0814 · error frames</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="fast_packet" /> Fast Packet flood <small>T0814 · 129029</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="rogue_master" /> Rogue Master <small>T0848 · SA 16 theft</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="gateway_bypass" /> Gateway bypass <small>T1692 · RPM on nav</small></label>
-        </div>
-      </section>
-      <section class="box" id="devices">
-        <h2>Devices</h2>
-        <div class="toggles" id="device-toggles"></div>
-      </section>
-    </footer>
-    <section class="ownship" aria-label="Own ship">
-      <div class="ownship-globe">
-        <svg id="own-globe" viewBox="0 0 132 132" aria-label="Globe"></svg>
-      </div>
-      <div class="ownship-readout">
-        <div>
-          <h2>Own ship</h2>
-          <dl id="own-stats">
-            <div><dt>Latitude</dt><dd>—</dd></div>
-            <div><dt>Longitude</dt><dd>—</dd></div>
-            <div><dt>Velocity</dt><dd>—</dd></div>
-            <div><dt>Gyro heading</dt><dd>—</dd></div>
-          </dl>
-        </div>
-      </div>
-    </section>
     <script>
       const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
       let lastTicks = -1;
@@ -568,7 +582,7 @@
           <div>${esc(m.summary)}</div>
           <div class="hex">${esc(m.hex)}</div>`;
         log.prepend(li);
-        while (log.children.length > 80) log.removeChild(log.lastChild);
+        while (log.children.length > 200) log.removeChild(log.lastChild);
       }
       function playEmissions(s) {
         if (s.ticks === lastTicks) return;
