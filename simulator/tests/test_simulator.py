@@ -33,6 +33,15 @@ def test_scenario_gps_spoof_phases():
     assert eng.state_at(30).phase == "hold"
 
 
+def test_scenario_stamps_wall_clock():
+    from datetime import datetime, timezone, timedelta
+
+    before = datetime.now(timezone.utc) - timedelta(seconds=2)
+    plant = ScenarioEngine("underway").state_at(8000)
+    after = datetime.now(timezone.utc) + timedelta(seconds=2)
+    assert before <= plant.t <= after
+
+
 def test_twins_spoof_splits_gnss():
     sim = OpvSimulator(attack_id="gps-spoof-primary", scenario_id="gps-spoof-underway")
     plant, frames = sim.tick(10)

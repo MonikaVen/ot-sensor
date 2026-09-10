@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from otlab import PlantState
 from otlab.geo import dest_point
@@ -21,7 +21,7 @@ class ScenarioEngine:
         self.scenario_id = scenario_id
         self.attack_id = attack_id
         self.sim_mode = sim_mode
-        self.t0 = datetime(2026, 9, 8, 19, 0, tzinfo=timezone.utc)
+        self.t0 = datetime.now(timezone.utc)
         self.lat0, self.lon0 = 54.5, 18.7
         self.heading = 90.0
         self.sog_kn = SOG_DEFAULT
@@ -100,7 +100,7 @@ class ScenarioEngine:
             else:
                 phase = "hold"
                 attack = "gps-spoof-both"
-        t = self.t0 + timedelta(seconds=elapsed_s)
+        t = datetime.now(timezone.utc)
         return PlantState(
             t=t,
             lat_deg=lat,
