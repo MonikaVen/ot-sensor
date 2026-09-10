@@ -1,4 +1,4 @@
-import { archiveBounds, downloadCsv, filterLogs, filterSeries, logId, logSource, logsCsv, plotsCsv, stampName, type ExplorerFilter, type LogSource } from "./explorer";
+import { archiveBounds, downloadCsv, EXPLORER_VIEW_MAX, filterLogs, filterSeries, logId, logSource, logsCsv, plotsCsv, stampName, talkerChoices, type ExplorerFilter, type LogSource } from "./explorer";
 import { ack, askAssistant, control, fetchAssistant, fetchSnapshot, updateRule } from "./api";
 import { assetMapSvg } from "./map";
 import { histogramPlot, linePlot, plotColors } from "./plot";
@@ -31,6 +31,7 @@ const state = {
     from: "",
     to: "",
     source: "both" as LogSource,
+    talker: "",
     selectedLogs: new Set<string>(),
     selectedPlots: new Set<string>(),
   },
@@ -340,7 +341,17 @@ function modelsPageHtml(snap: Snapshot): string {
 }
 
 function plotsFilter(): ExplorerFilter {
-  return { from: state.plots.from, to: state.plots.to, source: state.plots.source };
+  return { from: state.plots.from, to: state.plots.to, source: state.plots.source, talker: state.plots.talker };
+}
+
+function talkerSelectHtml(snap: Snapshot): string {
+  const choices = talkerChoices(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
+  return `<option value="" ${state.plots.talker === "" ? "selected" : ""}>All talkers</option>${choices
+    .map(
+      (t) =>
+        `<option value="${esc(t.sa)}" ${state.plots.talker === t.sa ? "selected" : ""}>SA ${esc(t.sa)} ${esc(t.name)}</option>`,
+    )
+    .join("")}`;
 }
 
 function explorerRows(snap: Snapshot): FlowMessage[] {
@@ -371,9 +382,10 @@ function plotsGridHtml(snap: Snapshot): string {
 function explorerBodyHtml(snap: Snapshot): string {
   const rows = explorerRows(snap);
   if (!rows.length) {
-    return `<tr><td colspan="8" class="muted">No log rows in this window. Widen the datetime range or choose Both.</td></tr>`;
+    return `<tr><td colspan="9" class="muted">No log rows in this window. Widen the datetime range, pick Both, or choose another talker.</td></tr>`;
   }
   return rows
+    .slice(0, EXPLORER_VIEW_MAX)
     .map((m, i) => {
       const id = logId(m, i);
       const src = logSource(m);
@@ -386,7 +398,8 @@ function explorerBodyHtml(snap: Snapshot): string {
         <td>PGN ${esc(String(m.pgn))}</td>
         <td>${esc(m.pgn_name)}</td>
         <td>${esc(m.technique || m.kind || "")}</td>
-        <td class="hex">${esc(m.summary)}</td>
+        <td>${esc(m.summary)}</td>
+        <td class="hex">${esc(m.hex)}</td>
       </tr>`;
     })
     .join("");
@@ -394,10 +407,12 @@ function explorerBodyHtml(snap: Snapshot): string {
 
 function explorerCountHtml(snap: Snapshot): string {
   const n = explorerRows(snap).length;
+  const shown = Math.min(n, EXPLORER_VIEW_MAX);
   const sel = state.plots.selectedLogs.size;
   const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
   const span = bounds ? ` · data ${bounds.from.replace("T", " ")} → ${bounds.to.replace("T", " ")}` : "";
-  return `${n} row${n === 1 ? "" : "s"} in view · ${sel ? `${sel} selected` : "export uses all rows in view"}${span}`;
+  const view = n > shown ? `showing ${shown} of ${n}` : `${n} row${n === 1 ? "" : "s"}`;
+  return `${view} in view · ${sel ? `${sel} selected` : "export uses all matching rows"}${span}`;
 }
 
 function plotsPageHtml(snap: Snapshot): string {
@@ -419,6 +434,7 @@ function plotsPageHtml(snap: Snapshot): string {
         <option value="benign" ${state.plots.source === "benign" ? "selected" : ""}>Benign</option>
         <option value="attack" ${state.plots.source === "attack" ? "selected" : ""}>Attack</option>
       </select></label>
+      <label>Talker <select data-plots-talker>${talkerSelectHtml(snap)}</select></label>
       <button type="button" class="btn" data-ctrl="plots-fit">Fit data range</button>
       <button type="button" class="btn" data-ctrl="plots-select-all">Select logs in view</button>
       <button type="button" class="btn" data-ctrl="plots-clear">Clear selection</button>
@@ -431,7 +447,7 @@ function plotsPageHtml(snap: Snapshot): string {
       <div class="explorer-table-wrap">
         <table class="explorer-table">
           <thead>
-            <tr><th></th><th>Time</th><th>Source</th><th>Talker</th><th>PGN</th><th>Name</th><th>Technique</th><th>Summary</th></tr>
+            <tr><th></th><th>Time</th><th>Source</th><th>Talker</th><th>PGN</th><th>Name</th><th>Technique</th><th>Summary</th><th>Hex</th></tr>
           </thead>
           <tbody id="explorer-tbody">${explorerBodyHtml(snap)}</tbody>
         </table>
@@ -447,6 +463,11 @@ function patchPlotsLive(snap: Snapshot): void {
   if (body) body.innerHTML = explorerBodyHtml(snap);
   const count = document.getElementById("explorer-count");
   if (count) count.textContent = explorerCountHtml(snap);
+  const talkerEl = document.querySelector("[data-plots-talker]");
+  if (talkerEl instanceof HTMLSelectElement && talkerEl !== document.activeElement) {
+    talkerEl.innerHTML = talkerSelectHtml(snap);
+    talkerEl.value = state.plots.talker;
+  }
   const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
   const fromEl = document.querySelector("[data-plots-from]");
   const toEl = document.querySelector("[data-plots-to]");
@@ -1074,6 +1095,11 @@ function bind(): void {
         const count = document.getElementById("explorer-count");
         if (count) count.textContent = explorerCountHtml(state.snap);
       }
+      return;
+    }
+    if (t instanceof HTMLSelectElement && t.hasAttribute("data-plots-talker")) {
+      state.plots.talker = t.value;
+      if (state.snap) patchPlotsLive(state.snap);
       return;
     }
     if (t instanceof HTMLSelectElement && t.hasAttribute("data-plots-source")) {

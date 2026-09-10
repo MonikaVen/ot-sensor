@@ -462,6 +462,31 @@ def test_catalog_twins_publish_missing_pgns():
     assert rud["kind"] == "ok"
     assert "rudder" in rud["summary"]
     catalog_sas = {str(sa) for sa, *_rest in DEVICE_CATALOG}
-    for sa in ("40", "48", "4", "5", "8", "21", "28", "32", "80", "84", "88"):
+    for sa in ("40", "48", "4", "5", "8", "21", "28", "32", "80", "84", "88", "12", "20", "60", "99"):
         assert sa in catalog_sas
         assert sa in rt.devices
+
+
+def test_every_catalog_device_emits_when_enabled():
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    for sa, *_rest in DEVICE_CATALOG:
+        rt.set_device(str(sa), True)
+    _plant, frames = rt.tick()
+    sas = {decode_fields(f)["sa"] for f in frames}
+    missing = [sa for sa, *_rest in DEVICE_CATALOG if sa not in sas]
+    assert missing == [], missing
+    mfd = [decode_fields(f) for f in frames if decode_fields(f)["sa"] == 60]
+    assert {r["pgn"] for r in mfd} >= {126992, 126993}
+    decoy = [decode_fields(f) for f in frames if decode_fields(f)["sa"] == 99]
+    assert 126993 in {r["pgn"] for r in decoy}
+    _plant, frames = rt.tick()
+    sas2 = {decode_fields(f)["sa"] for f in frames}
+    missing2 = [sa for sa, *_rest in DEVICE_CATALOG if sa not in sas2]
+    assert missing2 == [], missing2
+    rt.set_device("60", False)
+    rt.set_device("99", False)
+    _plant, frames = rt.tick()
+    off = {decode_fields(f)["sa"] for f in frames}
+    assert 60 not in off
+    assert 99 not in off

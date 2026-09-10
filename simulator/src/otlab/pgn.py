@@ -165,6 +165,19 @@ def encode_environment(t, segment: str, sa: int, temp_c: float, humidity_pct: fl
     return CanFrame(t, segment, pack_id(130311, sa), data[:8])
 
 
+def encode_system_time(t, segment: str, sa: int) -> CanFrame:
+    hh = int(getattr(t, "hour", 0) or 0)
+    mm = int(getattr(t, "minute", 0) or 0)
+    ss = int(getattr(t, "second", 0) or 0)
+    data = bytes([hh & 0xFF, mm & 0xFF, ss & 0xFF]) + b"\xff\xff\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(126992, sa), data[:8])
+
+
+def encode_heartbeat(t, segment: str, sa: int, interval_s: float = 1.0) -> CanFrame:
+    data = _u16(interval_s, 0.01) + b"\x00\xff\xff\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(126993, sa), data[:8])
+
+
 def decode_fields(frame: CanFrame) -> dict:
     ids = unpack_id(frame.can_id)
     pgn, data = ids["pgn"], frame.data
@@ -251,6 +264,10 @@ def decode_fields(frame: CanFrame) -> dict:
             operation_name="heading_control_status" if status else "heading_control",
             privileged=not status,
         )
+    elif pgn == 126992 and len(data) >= 3:
+        out.update(hour=data[0], minute=data[1], second=data[2], operation_name="system_time")
+    elif pgn == 126993:
+        out.update(operation_name="heartbeat")
     elif pgn == 59904:
         req = data[0] | (data[1] << 8) | (data[2] << 16) if len(data) >= 3 else 0
         out.update(requested_pgn=req, operation_name="iso_request", privileged=True)

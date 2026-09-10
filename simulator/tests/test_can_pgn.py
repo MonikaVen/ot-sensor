@@ -67,3 +67,15 @@ def test_attitude_rudder_engine_ais_control_roundtrip():
     cmd = decode_fields(encode_heading_control(t, "nav", 44, 90.0))
     assert cmd["operation_name"] == "heading_control"
     assert cmd.get("privileged") is True
+
+
+def test_system_time_and_heartbeat_roundtrip():
+    from otlab.pgn import encode_heartbeat, encode_system_time
+
+    t = datetime(2026, 9, 8, 19, 4, 6, tzinfo=timezone.utc)
+    clock = decode_fields(encode_system_time(t, "nav", 60))
+    assert clock["pgn"] == 126992
+    assert clock["hour"] == 19 and clock["minute"] == 4 and clock["second"] == 6
+    beat = decode_fields(encode_heartbeat(t, "nav", 99))
+    assert beat["pgn"] == 126993
+    assert beat["operation_name"] == "heartbeat"

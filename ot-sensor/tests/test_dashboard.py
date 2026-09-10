@@ -56,6 +56,12 @@ def test_runtime_inventory_and_incident(tmp_path):
     assert any(m["source"] == "attack" for m in archive)
     assert any(m["source"] == "benign" for m in archive)
     assert all("id" in m and "t" in m for m in archive[:5])
+    rt.sim.set_device("60", True)
+    rt.sim.set_device("99", True)
+    rt.step()
+    later = rt.snapshot()["log_archive"]
+    assert any(m["sa"] == "60" for m in later)
+    assert any(m["sa"] == "99" for m in later)
     rt.sim.set_attack("read", False)
     rt.sim.set_attack("gyro", True)
     rt.step()

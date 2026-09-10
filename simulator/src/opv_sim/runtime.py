@@ -26,6 +26,8 @@ from opv_sim.twins import (
 PGN_NAME = {
     59904: "ISO request",
     60928: "ISO address claim",
+    126992: "System time",
+    126993: "Heartbeat",
     126208: "Engine/thruster command",
     127237: "Heading/track control",
     127245: "Rudder",
@@ -276,6 +278,10 @@ def _summary(fields: dict) -> str:
         return f"heading {fields['heading_deg']:.1f}°"
     if "rpm" in fields:
         return f"{fields['rpm']:.0f} rpm"
+    if fields.get("operation_name") == "system_time":
+        return f"time {int(fields.get('hour', 0)):02d}:{int(fields.get('minute', 0)):02d}:{int(fields.get('second', 0)):02d}"
+    if fields.get("operation_name") == "heartbeat":
+        return "heartbeat"
     if fields.get("operation_name") == "address_claim":
         name = fields.get("iso_name") or "claim"
         return f"ISO NAME claim {name}"

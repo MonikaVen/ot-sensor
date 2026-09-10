@@ -29,6 +29,8 @@ from otlab.pgn import (
     encode_rudder,
     encode_sats,
     encode_speed_water,
+    encode_system_time,
+    encode_heartbeat,
     encode_transmission,
     encode_wind,
     decode_fields,
@@ -585,6 +587,12 @@ class DeviceTwins:
             self._emit(frames, encode_fluid_level(plant.t, "aux", 84, 41.0, instance=1))
         if self._on(88):
             self._emit(frames, encode_binary_status(plant.t, "aux", 88, 0))
+        if self._on(60):
+            self._emit(frames, encode_system_time(plant.t, "nav", 60))
+            self._emit(frames, encode_heartbeat(plant.t, "nav", 60))
+        if self._on(99):
+            self._emit(frames, encode_heartbeat(plant.t, "nav", 99, 1.0))
+            self._emit(frames, encode_binary_status(plant.t, "nav", 99, 0xA5))
 
         attacks = self.injector.attacks
         if attacks.get("pgn_flood") and self._on(35):

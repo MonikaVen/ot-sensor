@@ -6,7 +6,10 @@ export type ExplorerFilter = {
   from: string;
   to: string;
   source: LogSource;
+  talker: string;
 };
+
+export const EXPLORER_VIEW_MAX = 400;
 
 export function sampleValue(item: HistogramSample | number): number {
   return typeof item === "number" ? item : Number(item.v);
@@ -51,6 +54,7 @@ export function filterLogs(rows: FlowMessage[], filter: ExplorerFilter): FlowMes
   return rows.filter((row) => {
     const src = logSource(row);
     if (filter.source !== "both" && src !== filter.source) return false;
+    if (filter.talker && row.sa !== filter.talker) return false;
     return inTimeWindow(row.t, fromMs, toMs);
   });
 }
@@ -150,6 +154,16 @@ export function archiveBounds(rows: FlowMessage[]): { from: string; to: string }
     from: isoToLocalInput(new Date(Math.min(...times)).toISOString()),
     to: isoToLocalInput(new Date(Math.max(...times)).toISOString()),
   };
+}
+
+export function talkerChoices(rows: FlowMessage[]): Array<{ sa: string; name: string }> {
+  const seen = new Map<string, string>();
+  for (const row of rows) {
+    if (!seen.has(row.sa)) seen.set(row.sa, row.name || `SA ${row.sa}`);
+  }
+  return [...seen.entries()]
+    .map(([sa, name]) => ({ sa, name }))
+    .sort((a, b) => Number(a.sa) - Number(b.sa) || a.name.localeCompare(b.name));
 }
 
 export function stampName(prefix: string): string {
