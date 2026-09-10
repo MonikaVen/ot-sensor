@@ -40,6 +40,12 @@ ROGUE_SA = 44
 FREQ_MIN = 1
 FREQ_MAX = 32
 FREQ_DEFAULT = 16
+SOG_MIN = 0.0
+SOG_MAX = 30.0
+SOG_DEFAULT = 12.0
+FRAMES_MIN = 1
+FRAMES_MAX = 32
+FRAMES_DEFAULT = 1
 GYRO_HEADING_OFFSET_DEG = 40.0
 ROT_OFFSET_DEG_S = 8.0
 VEL_SOG_OFFSET_KN = 8.0
@@ -172,6 +178,22 @@ def clamp_frequency(hz: float | int | None) -> int:
     return max(FREQ_MIN, min(FREQ_MAX, value))
 
 
+def clamp_sog(kn: float | int | None) -> float:
+    try:
+        value = float(kn)
+    except (TypeError, ValueError):
+        return SOG_DEFAULT
+    return max(SOG_MIN, min(SOG_MAX, round(value * 2.0) / 2.0))
+
+
+def clamp_frames(n: float | int | None) -> int:
+    try:
+        value = int(round(float(n)))
+    except (TypeError, ValueError):
+        return FRAMES_DEFAULT
+    return max(FRAMES_MIN, min(FRAMES_MAX, value))
+
+
 def default_devices() -> dict[str, bool]:
     return {str(sa): on for sa, _seg, _name, on in DEVICE_CATALOG}
 
@@ -246,6 +268,7 @@ class AttackInjector:
         self.sim_mode = sim_mode
         self.intensity = 1.0
         self.frequency = FREQ_DEFAULT
+        self.frame_copies = FRAMES_DEFAULT
         self.attacks = default_attacks(False)
         self.labels: list[LabelRecord] = []
 
@@ -361,20 +384,25 @@ class DeviceTwins:
             return
         self.enabled[str(sa)] = bool(enabled)
 
-    def _emit(self, frames: list[CanFrame], enc: CanFrame) -> None:
-        self.bus.send(enc)
-        frames.append(enc)
+    def _emit(self, frames: list[CanFrame], enc: CanFrame, *, copies: int | None = None) -> None:
+        n = self.injector.frame_copies if copies is None else copies
+        n = max(1, int(n))
+        for _ in range(n):
+            self.bus.send(enc)
+            frames.append(enc)
 
     def _burst(self, frames: list[CanFrame], make) -> None:
         for _ in range(self.injector.burst_n()):
-            self._emit(frames, make())
+            enc = make()
+            self.bus.send(enc)
+            frames.append(enc)
 
     def publish(self, plant: PlantState) -> list[CanFrame]:
         frames: list[CanFrame] = []
         n = self.injector.burst_n()
         for sa, seg, name, _on in DEVICE_CATALOG:
             if self._on(sa) and sa not in self.claimed:
-                self._emit(frames, encode_claim(plant.t, seg, sa, name[:8]))
+                self._emit(frames, encode_claim(plant.t, seg, sa, name[:8]), copies=1)
                 self.claimed.add(sa)
             if not self._on(sa):
                 self.claimed.discard(sa)
@@ -580,9 +608,9 @@ class DeviceTwins:
         if attacks.get("read") or attacks.get("read_flood"):
             count = n if attacks.get("read_flood") else 1
             for _ in range(count):
-                self._emit(frames, encode_iso_request(plant.t, "nav", ROGUE_SA, 16, 129025))
-                self._emit(frames, encode_iso_request(plant.t, "propulsion", ROGUE_SA, 0, 127488))
-                self._emit(frames, encode_iso_request(plant.t, "propulsion", ROGUE_SA, 1, 127488))
+                self._emit(frames, encode_iso_request(plant.t, "nav", ROGUE_SA, 16, 129025), copies=1)
+                self._emit(frames, encode_iso_request(plant.t, "propulsion", ROGUE_SA, 0, 127488), copies=1)
+                self._emit(frames, encode_iso_request(plant.t, "propulsion", ROGUE_SA, 1, 127488), copies=1)
             self.injector.record_label(
                 plant,
                 59904,
@@ -595,7 +623,7 @@ class DeviceTwins:
         if attacks.get("write") or attacks.get("write_flood"):
             count = n if attacks.get("write_flood") else 1
             for _ in range(count):
-                self._emit(frames, encode_heading_control(plant.t, "nav", ROGUE_SA, plant.heading_deg))
+                self._emit(frames, encode_heading_control(plant.t, "nav", ROGUE_SA, plant.heading_deg), copies=1)
             self.injector.record_label(
                 plant,
                 127237,

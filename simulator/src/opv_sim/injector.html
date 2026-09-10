@@ -44,7 +44,12 @@
       .kicker { margin: 0; color: var(--muted); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
       h1 { margin: 2px 0 0; font-size: 22px; font-weight: 600; }
       h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
-      #stats { display: flex; gap: 18px; margin: 0; }
+      #stats { display: flex; gap: 18px; margin: 0; flex-wrap: wrap; align-items: end; }
+      #stats .stat-slider { min-width: 148px; }
+      #stats .stat-slider dd { margin-top: 6px; }
+      #stats .stat-slider input[type="range"] { width: 100%; accent-color: var(--accent); height: 4px; }
+      #stats output { color: var(--text); font-variant-numeric: tabular-nums; }
+      #stats .count { color: var(--muted); font-weight: 400; font-size: 11px; }
       dt { font-size: 11px; color: var(--muted); }
       dd { margin: 0; font-size: 15px; }
       .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -156,7 +161,19 @@
         <p class="kicker">Lab only · NMEA 2000 injector</p>
         <h1>OPV simulator</h1>
       </div>
-      <dl id="stats"></dl>
+      <dl id="stats">
+        <div><dt>Mode</dt><dd id="stat-mode">dev</dd></div>
+        <div><dt>Phase</dt><dd id="stat-phase">idle</dd></div>
+        <div><dt>Attack</dt><dd id="stat-attack">off</dd></div>
+        <div class="stat-slider">
+          <dt><label for="sog">SOG <output id="sog-out">12.0</output> kn</label></dt>
+          <dd><input type="range" id="sog" min="0" max="30" step="0.5" value="12" /></dd>
+        </div>
+        <div class="stat-slider">
+          <dt><label for="frames">Frames <output id="frames-out">1</output>× <span class="count" id="stat-frames-n"></span></label></dt>
+          <dd><input type="range" id="frames" min="1" max="32" step="1" value="1" /></dd>
+        </div>
+      </dl>
       <div class="controls">
         <button type="button" class="primary" id="run">Start</button>
       </div>
@@ -454,6 +471,18 @@
           hz.value = String(s.frequency);
           if (hzOut) hzOut.value = String(s.frequency);
         }
+        const sog = document.getElementById("sog");
+        const sogOut = document.getElementById("sog-out");
+        if (sog && document.activeElement !== sog && s.sog_kn != null) {
+          sog.value = String(s.sog_kn);
+          if (sogOut) sogOut.value = Number(s.sog_kn).toFixed(1);
+        }
+        const fr = document.getElementById("frames");
+        const frOut = document.getElementById("frames-out");
+        if (fr && document.activeElement !== fr && s.frame_copies != null) {
+          fr.value = String(s.frame_copies);
+          if (frOut) frOut.value = String(s.frame_copies);
+        }
         const devices = s.devices || {};
         document.querySelectorAll("[data-device]").forEach((el) => {
           if (document.activeElement === el) return;
@@ -490,12 +519,11 @@
       function renderStats(s) {
         const p = s.plant || {};
         const active = Object.entries(s.attacks || {}).filter(([, v]) => v).map(([k]) => k);
-        document.getElementById("stats").innerHTML = `
-          <div><dt>Mode</dt><dd>${esc(s.sim_mode)}</dd></div>
-          <div><dt>Phase</dt><dd>${esc(p.phase || "idle")}</dd></div>
-          <div><dt>Attack</dt><dd>${esc(active.join(", ") || "off")}</dd></div>
-          <div><dt>SOG</dt><dd>${p.sog_kn != null ? p.sog_kn.toFixed(1) + " kn" : "—"}</dd></div>
-          <div><dt>Frames</dt><dd>${s.frames_this_tick}</dd></div>`;
+        document.getElementById("stat-mode").textContent = s.sim_mode || "dev";
+        document.getElementById("stat-phase").textContent = p.phase || "idle";
+        document.getElementById("stat-attack").textContent = active.join(", ") || "off";
+        const n = document.getElementById("stat-frames-n");
+        if (n) n.textContent = s.frames_this_tick != null ? `${s.frames_this_tick} this tick` : "";
         document.getElementById("run").textContent = s.running ? "Pause" : "Start";
         ensureDevices(s);
         syncToggles(s);
@@ -576,6 +604,18 @@
       });
       document.getElementById("hz").addEventListener("change", async (ev) => {
         apply(await control("frequency", { frequency: Number(ev.target.value) }));
+      });
+      document.getElementById("sog").addEventListener("input", (ev) => {
+        document.getElementById("sog-out").value = Number(ev.target.value).toFixed(1);
+      });
+      document.getElementById("sog").addEventListener("change", async (ev) => {
+        apply(await control("sog", { sog: Number(ev.target.value) }));
+      });
+      document.getElementById("frames").addEventListener("input", (ev) => {
+        document.getElementById("frames-out").value = ev.target.value;
+      });
+      document.getElementById("frames").addEventListener("change", async (ev) => {
+        apply(await control("frames", { frames: Number(ev.target.value) }));
       });
       document.getElementById("device-toggles").addEventListener("change", async (ev) => {
         const t = ev.target;

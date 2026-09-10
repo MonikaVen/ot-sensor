@@ -13,9 +13,13 @@ from opv_sim.twins import (
     ATTACK_KEYS,
     ATTACK_TECHNIQUES,
     DEVICE_CATALOG,
+    FRAMES_DEFAULT,
     FREQ_DEFAULT,
+    SOG_DEFAULT,
     attacks_for,
+    clamp_frames,
     clamp_frequency,
+    clamp_sog,
     default_devices,
 )
 
@@ -275,6 +279,8 @@ class SimRuntime:
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
         self.intensity = 1.0 if gnss else 0.0
         self.frequency = FREQ_DEFAULT
+        self.sog_kn = SOG_DEFAULT
+        self.frame_copies = FRAMES_DEFAULT
         self._build()
 
     def _build(self) -> None:
@@ -294,6 +300,8 @@ class SimRuntime:
         self.sim.injector.attacks = dict(self.attacks)
         self.sim.injector.intensity = self.intensity
         self.sim.injector.frequency = self.frequency
+        self.sim.injector.frame_copies = self.frame_copies
+        self.sim.engine.sog_kn = self.sog_kn
 
     def reset(self, attack_id: str | None = None) -> None:
         if attack_id is not None:
@@ -308,6 +316,8 @@ class SimRuntime:
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
         self.intensity = 1.0 if gnss else 0.0
         self.frequency = FREQ_DEFAULT
+        self.sog_kn = SOG_DEFAULT
+        self.frame_copies = FRAMES_DEFAULT
         self._build()
 
     def set_intensity(self, intensity: float) -> None:
@@ -316,6 +326,17 @@ class SimRuntime:
     def set_frequency(self, hz: float | int) -> None:
         self.frequency = clamp_frequency(hz)
         self.sim.injector.frequency = self.frequency
+
+    def set_sog(self, kn: float | int) -> None:
+        kn = clamp_sog(kn)
+        if self.plant is not None:
+            self.sim.engine.rebase(self.plant, self.elapsed)
+        self.sog_kn = kn
+        self.sim.engine.sog_kn = kn
+
+    def set_frames(self, n: float | int) -> None:
+        self.frame_copies = clamp_frames(n)
+        self.sim.injector.frame_copies = self.frame_copies
 
     def set_attack(self, kind: str, enabled: bool) -> None:
         if kind not in ATTACK_KEYS:
@@ -416,6 +437,8 @@ class SimRuntime:
             ],
             "intensity": round(self.intensity, 3),
             "frequency": hz,
+            "sog_kn": self.sog_kn,
+            "frame_copies": self.frame_copies,
             "elapsed_s": self.elapsed,
             "ticks": self.ticks,
             "frames_this_tick": len(self.last_frames),

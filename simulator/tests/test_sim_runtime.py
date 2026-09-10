@@ -103,6 +103,8 @@ def test_sim_control_api_sets_attack():
         assert 'data-attack="gateway_bypass"' in r.text
         assert 'data-attack="error_flood"' in r.text
         assert 'id="hz"' in r.text
+        assert 'id="sog"' in r.text
+        assert 'id="frames"' in r.text
         assert "T0848" in r.text
         assert "T1692.001" in r.text
         assert 'id="own-globe"' in r.text
@@ -318,6 +320,63 @@ def test_frequency_control_api():
         r = client.post("/api/control", json={"action": "toggle_attack", "attack": "rogue_master", "enabled": True})
         assert r.json()["snapshot"]["attacks"]["rogue_master"] is True
         assert r.json()["snapshot"]["attack_id"] == "rogue-master"
+
+
+def test_sog_and_frames_sliders():
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    plant, frames = rt.tick()
+    assert plant.sog_kn == 12.0
+    cog = next(
+        decode_fields(f)
+        for f in frames
+        if decode_fields(f).get("pgn") == 129026 and decode_fields(f)["sa"] == 16
+    )
+    assert abs(cog["sog_kn"] - 12.0) < 0.2
+    lat0 = plant.lat_deg
+
+    rt.set_sog(0)
+    plant, frames = rt.tick()
+    assert plant.sog_kn == 0.0
+    assert abs(plant.lat_deg - lat0) < 1e-5
+    cog = next(
+        decode_fields(f)
+        for f in frames
+        if decode_fields(f).get("pgn") == 129026 and decode_fields(f)["sa"] == 16
+    )
+    assert cog["sog_kn"] < 0.3
+    rpm = next(
+        decode_fields(f)
+        for f in frames
+        if decode_fields(f).get("pgn") == 127488 and decode_fields(f)["sa"] == 0
+    )
+    assert rpm["rpm"] < 50
+
+    rt.set_sog(24)
+    plant, frames = rt.tick()
+    assert plant.sog_kn == 24.0
+    cog = next(
+        decode_fields(f)
+        for f in frames
+        if decode_fields(f).get("pgn") == 129026 and decode_fields(f)["sa"] == 16
+    )
+    assert abs(cog["sog_kn"] - 24.0) < 0.3
+
+    rt.set_frames(3)
+    _p, frames = rt.tick()
+    assert rt.snapshot()["frame_copies"] == 3
+    pos = [f for f in frames if decode_fields(f).get("pgn") == 129025 and decode_fields(f)["sa"] == 16]
+    assert len(pos) == 3
+
+    from opv_sim.app import app, runtime
+
+    runtime.reset("")
+    runtime.running = False
+    with TestClient(app) as client:
+        r = client.post("/api/control", json={"action": "sog", "sog": 6})
+        assert r.json()["snapshot"]["sog_kn"] == 6.0
+        r = client.post("/api/control", json={"action": "frames", "frames": 4})
+        assert r.json()["snapshot"]["frame_copies"] == 4
 
 
 def test_catalog_twins_publish_missing_pgns():

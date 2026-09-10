@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from otlab import PlantState
 from otlab.geo import dest_point
+from opv_sim.twins import SOG_DEFAULT
 
 
 class ScenarioEngine:
@@ -23,10 +24,17 @@ class ScenarioEngine:
         self.t0 = datetime(2026, 9, 8, 19, 0, tzinfo=timezone.utc)
         self.lat0, self.lon0 = 54.5, 18.7
         self.heading = 90.0
-        self.sog_kn = 12.0
+        self.sog_kn = SOG_DEFAULT
+        self.origin_elapsed = 0.0
+
+    def rebase(self, plant: PlantState, elapsed_s: float) -> None:
+        self.lat0 = plant.lat_deg
+        self.lon0 = plant.lon_deg
+        self.origin_elapsed = elapsed_s
 
     def state_at(self, elapsed_s: float) -> PlantState:
-        dist_m = self.sog_kn * 0.514444 * elapsed_s
+        move_s = max(0.0, elapsed_s - self.origin_elapsed)
+        dist_m = self.sog_kn * 0.514444 * move_s
         lat, lon = dest_point(self.lat0, self.lon0, self.heading, dist_m)
         phase = "baseline"
         attack = None
@@ -104,8 +112,8 @@ class ScenarioEngine:
             depth_m=18.0,
             hdop=hdop,
             sat_count=sats,
-            rpm_port=1400.0,
-            rpm_stbd=1400.0,
+            rpm_port=(self.sog_kn / SOG_DEFAULT) * 1400.0,
+            rpm_stbd=(self.sog_kn / SOG_DEFAULT) * 1400.0,
             oil_temp_c=78.0,
             breaker_closed=True,
             phase=phase,
