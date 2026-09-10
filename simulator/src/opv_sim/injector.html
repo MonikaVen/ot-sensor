@@ -125,18 +125,19 @@
       #log .hex { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 10px; }
       .row-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
       footer.bottom {
-        display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 220px); gap: 0;
+        display: flex; flex-direction: column; gap: 0;
         border-top: 1px solid var(--stroke); background: var(--panel); flex-shrink: 0;
       }
       .box { padding: 12px 12px 14px; min-width: 0; }
-      .box + .box { border-left: 1px solid var(--stroke); }
+      .box + .box { border-left: 0; border-top: 1px solid var(--stroke); }
       .toggles { display: flex; flex-wrap: wrap; gap: 6px 8px; }
       .switch {
         display: flex; align-items: center; gap: 6px; font-size: 11px;
         border: 1px solid var(--stroke); padding: 4px 8px; background: var(--bg); cursor: pointer;
       }
-      #attacks .toggles { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 6px; }
-      #devices .toggles { display: flex; flex-direction: column; flex-wrap: nowrap; }
+      #attacks .toggles, #devices .toggles {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 6px;
+      }
       .switch input { accent-color: var(--ok); width: 16px; height: 16px; }
       .switch.attack input { accent-color: var(--bad); }
       .switch small { color: var(--muted); font-size: 10px; }
@@ -161,9 +162,8 @@
         html, body { overflow: auto; }
         .workspace { grid-template-columns: 1fr; }
         .bus-log { min-height: 45vh; height: 45vh; }
-        footer.bottom { grid-template-columns: 1fr; }
+        footer.bottom { display: flex; flex-direction: column; }
         .box + .box { border-left: 0; border-top: 1px solid var(--stroke); }
-        #devices .toggles { flex-direction: row; flex-wrap: wrap; }
       }
     </style>
   </head>
