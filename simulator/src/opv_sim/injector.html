@@ -141,7 +141,6 @@
         padding: 6px 8px; font: inherit; font-size: 13px; min-width: 160px; max-width: 100%;
       }
       .plots-toolbar .plots-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
-      .plots-toolbar .plots-actions button.primary { border-color: var(--ok); color: var(--ok); }
       .plot-card {
         border: 1px solid var(--stroke); background: var(--panel); padding: 10px 12px 12px;
         flex: 1 1 58%; min-height: 0; min-width: 0;
@@ -280,7 +279,6 @@
         </label>
         <div class="plots-actions">
           <span class="hint" id="plot-live">paused</span>
-          <button type="button" class="primary" id="export-plots">Export CSV</button>
         </div>
       </div>
       <article class="plot-card" id="collective-card">
@@ -988,7 +986,6 @@
         downloadCsv(stamp("opv-sim-nmea"), logsCsv(lastSnap));
       }
       document.getElementById("export-csv").onclick = exportCsv;
-      document.getElementById("export-plots").onclick = exportCsv;
       document.getElementById("sog").addEventListener("input", (ev) => {
         document.getElementById("sog-out").value = Number(ev.target.value).toFixed(1);
       });
