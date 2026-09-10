@@ -105,6 +105,10 @@ def control(body: ControlBody):
         if body.frequency is None:
             return {"ok": False, "error": "frequency required"}
         runtime.set_frequency(body.frequency)
+    elif body.action == "frequency_random":
+        if body.enabled is None:
+            return {"ok": False, "error": "enabled required"}
+        runtime.set_frequency_random(body.enabled)
     elif body.action == "sog":
         if body.sog is None:
             return {"ok": False, "error": "sog required"}

@@ -61,10 +61,12 @@ Open http://127.0.0.1:8444
 | --- | --- |
 | `GET /` | Injector UI (MITRE overlays + frequency slider) |
 | `GET /api/tap` | Listen-only frames for `ot-dashboard` |
-| `POST /api/control` | `toggle_attack`, `frequency`, `reset`, `start`, `pause` |
+| `POST /api/control` | `toggle_attack`, `frequency`, `frequency_random`, `reset`, `start`, `pause` |
 | `GET /api/health` | `mode` + `attack_id` |
 
-Frequency (1–32 Hz) sizes flood bursts and repeats spoofed talker rows in the attack log. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).
+Frequency (1–32 Hz) sizes flood bursts and repeats spoofed talker rows in the attack log. Check **Randomize** to pick a new Hz each tick; moving the slider turns randomize off and locks that rate. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).
+
+The right rail has **Messages** and **Plots**. Plots filter by named overlay (`GNSS-1 spoof`, `Gyro spoof`, …) plus **All attacks**.
 
 Attach the sensor:
 

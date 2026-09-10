@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections import deque
 from datetime import datetime, timezone
 
@@ -15,6 +16,8 @@ from opv_sim.twins import (
     DEVICE_CATALOG,
     FRAMES_DEFAULT,
     FREQ_DEFAULT,
+    FREQ_MAX,
+    FREQ_MIN,
     SOG_DEFAULT,
     attacks_for,
     clamp_frames,
@@ -419,6 +422,7 @@ class SimRuntime:
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
         self.intensity = 1.0 if gnss else 0.0
         self.frequency = FREQ_DEFAULT
+        self.frequency_random = False
         self.sog_kn = SOG_DEFAULT
         self.frame_copies = FRAMES_DEFAULT
         self.hist = empty_hist()
@@ -457,6 +461,7 @@ class SimRuntime:
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
         self.intensity = 1.0 if gnss else 0.0
         self.frequency = FREQ_DEFAULT
+        self.frequency_random = False
         self.sog_kn = SOG_DEFAULT
         self.frame_copies = FRAMES_DEFAULT
         self.hist = empty_hist()
@@ -466,8 +471,15 @@ class SimRuntime:
         self.set_attack("spoof", float(intensity) > 0)
 
     def set_frequency(self, hz: float | int) -> None:
+        self.frequency_random = False
         self.frequency = clamp_frequency(hz)
         self.sim.injector.frequency = self.frequency
+
+    def set_frequency_random(self, enabled: bool) -> None:
+        self.frequency_random = bool(enabled)
+        if self.frequency_random:
+            self.frequency = random.randint(FREQ_MIN, FREQ_MAX)
+            self.sim.injector.frequency = self.frequency
 
     def set_sog(self, kn: float | int) -> None:
         kn = clamp_sog(kn)
@@ -537,6 +549,9 @@ class SimRuntime:
         ]
 
     def tick(self):
+        if self.frequency_random:
+            self.frequency = random.randint(FREQ_MIN, FREQ_MAX)
+            self.sim.injector.frequency = self.frequency
         plant, frames = self.sim.tick(self.elapsed, attacks=self.attacks, frequency=self.frequency)
         self.plant = plant
         self.last_frames = frames
@@ -566,6 +581,7 @@ class SimRuntime:
             "plant": snap["plant"],
             "attacks": dict(self.attacks),
             "frequency": self.frequency,
+            "frequency_random": self.frequency_random,
             "histograms": self.histogram_payload(),
             "frames": [
                 {
@@ -607,6 +623,7 @@ class SimRuntime:
             ],
             "intensity": round(self.intensity, 3),
             "frequency": hz,
+            "frequency_random": self.frequency_random,
             "sog_kn": self.sog_kn,
             "frame_copies": self.frame_copies,
             "elapsed_s": self.elapsed,

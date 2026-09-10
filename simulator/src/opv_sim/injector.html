@@ -63,6 +63,7 @@
         padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
       }
       button.primary { border-color: var(--accent); color: var(--accent); }
+      button.active { border-color: var(--accent); color: var(--accent); background: #152033; }
       .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); min-height: 0; flex: 1; }
       .main-col {
         display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: auto;
@@ -117,6 +118,35 @@
         display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
         padding: 12px 14px 8px; flex-shrink: 0;
       }
+      .rail-tabs { display: flex; gap: 6px; }
+      .rail-tabs button { padding: 4px 10px; font-size: 12px; }
+      #plots {
+        display: none; flex-direction: column; min-height: 0; flex: 1; overflow: auto;
+        padding: 0 12px 16px;
+      }
+      .bus-log.plots-open #log { display: none; }
+      .bus-log.plots-open #plots { display: flex; }
+      .plot-filter {
+        display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px;
+        font-size: 11px; color: var(--muted);
+      }
+      .plot-filter select {
+        background: var(--bg); color: var(--text); border: 1px solid var(--stroke);
+        padding: 6px 8px; font: inherit; font-size: 12px;
+      }
+      #plots-grid { display: flex; flex-direction: column; gap: 10px; }
+      .plot-card {
+        border: 1px solid var(--stroke); background: var(--bg); padding: 8px 10px 10px;
+      }
+      .plot-card.detect { border-color: var(--bad); }
+      .plot-card h3 {
+        margin: 0 0 2px; font-size: 12px; font-weight: 600; letter-spacing: 0;
+        text-transform: none; color: var(--text);
+      }
+      .plot-card .meta { color: var(--muted); font-size: 10px; margin: 0 0 6px; }
+      .plot-card svg { width: 100%; height: 88px; display: block; }
+      .plot-legend { display: flex; gap: 10px; margin: 6px 0 0; font-size: 10px; color: var(--muted); }
+      .plot-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: middle; }
       #log { list-style: none; margin: 0; padding: 8px 0 16px; overflow: auto; flex: 1; }
       #log li {
         padding: 8px 14px; border-bottom: 1px solid var(--stroke); font-size: 12px;
@@ -156,6 +186,8 @@
       .freq label { display: flex; align-items: center; gap: 8px; min-width: 110px; }
       .freq output { color: var(--bad); font-variant-numeric: tabular-nums; font-weight: 600; }
       .freq input[type="range"] { flex: 1; accent-color: var(--bad); height: 4px; }
+      .freq .rand { display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; color: var(--text); }
+      .freq .rand input { accent-color: var(--bad); }
       @keyframes flash {
         0% { background: #1c3a28; border-color: var(--ok); box-shadow: 0 0 14px #3caf7a88; }
         100% { background: var(--bg); border-color: var(--stroke); box-shadow: none; }
@@ -263,6 +295,7 @@
           <div class="freq">
             <label for="hz">Frequency <output id="hz-out">16</output> Hz</label>
             <input type="range" id="hz" min="1" max="32" step="1" value="16" />
+            <label class="rand"><input type="checkbox" id="hz-rand" /> Randomize</label>
           </div>
           <div class="toggles">
             <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002 · 129025</small></label>
@@ -311,8 +344,21 @@
       <aside class="bus-log">
         <div class="rail-head">
           <h2 id="rail-title">Emitted messages</h2>
+          <div class="rail-tabs">
+            <button type="button" class="active" data-rail="messages">Messages</button>
+            <button type="button" data-rail="plots">Plots</button>
+          </div>
         </div>
         <ol id="log"></ol>
+        <div id="plots">
+          <div class="plot-filter">
+            <label for="plot-attack">Attack</label>
+            <select id="plot-attack">
+              <option value="all">All attacks</option>
+            </select>
+          </div>
+          <div id="plots-grid"></div>
+        </div>
       </aside>
     </div>
     <script>
@@ -483,6 +529,79 @@
         ).join("");
         box.dataset.ready = "1";
       }
+      function ensurePlotSelect(s) {
+        const sel = document.getElementById("plot-attack");
+        if (!sel || sel.dataset.ready) return;
+        const catalog = s.attack_catalog || [];
+        sel.innerHTML = `<option value="all">All attacks</option>` + catalog.map((d) =>
+          `<option value="${esc(d.key)}">${esc(d.label)}</option>`
+        ).join("");
+        sel.dataset.ready = "1";
+      }
+      function nums(series) {
+        return (series || []).map((x) => (typeof x === "number" ? x : Number(x && x.v))).filter(Number.isFinite);
+      }
+      function histSvg(benign, attack) {
+        const w = 320, h = 88, padL = 28, padR = 8, padT = 8, padB = 16, nBins = 10;
+        const vals = [...benign, ...attack];
+        if (!vals.length) {
+          return `<svg viewBox="0 0 ${w} ${h}" role="img"><text x="${w / 2}" y="${h / 2}" text-anchor="middle" fill="#8b97a8" font-size="11">waiting for samples</text></svg>`;
+        }
+        let lo = Math.min(...vals), hi = Math.max(...vals);
+        if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+        const span = hi - lo;
+        const binsB = Array(nBins).fill(0);
+        const binsA = Array(nBins).fill(0);
+        const place = (arr, bins) => {
+          for (const v of arr) bins[Math.min(nBins - 1, Math.floor(((v - lo) / span) * nBins))]++;
+        };
+        place(benign, binsB);
+        place(attack, binsA);
+        const peak = Math.max(1, ...binsB, ...binsA);
+        const innerW = w - padL - padR;
+        const innerH = h - padT - padB;
+        const slot = innerW / nBins;
+        const barW = Math.max(2, (slot - 2) / 2);
+        const yAt = (c) => padT + innerH - (c / peak) * innerH;
+        const bars = [];
+        for (let i = 0; i < nBins; i++) {
+          const x = padL + i * slot;
+          const hb = Math.max(0, innerH - (yAt(binsB[i]) - padT));
+          const ha = Math.max(0, innerH - (yAt(binsA[i]) - padT));
+          bars.push(`<rect x="${x.toFixed(1)}" y="${yAt(binsB[i]).toFixed(1)}" width="${barW}" height="${hb.toFixed(1)}" fill="#3caf7a"/>`);
+          bars.push(`<rect x="${(x + barW + 1).toFixed(1)}" y="${yAt(binsA[i]).toFixed(1)}" width="${barW}" height="${ha.toFixed(1)}" fill="#d45b4c"/>`);
+        }
+        const fmt = (v) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2));
+        return `<svg viewBox="0 0 ${w} ${h}" role="img">
+          <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="#2a3340" />
+          <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="#2a3340" />
+          ${bars.join("")}
+          <text x="${padL}" y="${h - 3}" fill="#8b97a8" font-size="9">${fmt(lo)}</text>
+          <text x="${w - padR}" y="${h - 3}" text-anchor="end" fill="#8b97a8" font-size="9">${fmt(hi)}</text>
+        </svg>`;
+      }
+      function renderPlots(s) {
+        ensurePlotSelect(s);
+        const grid = document.getElementById("plots-grid");
+        const sel = document.getElementById("plot-attack");
+        if (!grid) return;
+        const key = sel ? sel.value : "all";
+        const rows = (s.histograms || []).filter((h) => key === "all" || h.key === key);
+        if (!rows.length) {
+          grid.innerHTML = `<p class="meta">No plot for that attack yet. Start the plant and toggle an overlay.</p>`;
+          return;
+        }
+        grid.innerHTML = rows.map((h) => {
+          const benign = nums(h.benign);
+          const attack = nums(h.attack);
+          return `<article class="plot-card ${h.active ? "detect" : ""}">
+            <h3>${esc(h.label)}</h3>
+            <p class="meta">${esc(h.technique || "")} · ${esc(h.unit || "")} · benign n=${benign.length} · attack n=${attack.length}${h.active ? " · live" : ""}</p>
+            ${histSvg(benign, attack)}
+            <p class="plot-legend"><span><i style="background:#3caf7a"></i>benign</span><span><i style="background:#d45b4c"></i>attack</span></p>
+          </article>`;
+        }).join("");
+      }
       function syncToggles(s) {
         const attacks = s.attacks || {};
         document.querySelectorAll("[data-attack]").forEach((el) => {
@@ -494,6 +613,10 @@
         if (hz && document.activeElement !== hz && s.frequency != null) {
           hz.value = String(s.frequency);
           if (hzOut) hzOut.value = String(s.frequency);
+        }
+        const hzRand = document.getElementById("hz-rand");
+        if (hzRand && document.activeElement !== hzRand) {
+          hzRand.checked = !!s.frequency_random;
         }
         const sog = document.getElementById("sog");
         const sogOut = document.getElementById("sog-out");
@@ -612,6 +735,7 @@
         renderStats(s);
         renderMotion(s);
         playEmissions(s);
+        renderPlots(s);
       }
       document.getElementById("run").onclick = async () => {
         const s = await snap();
@@ -627,6 +751,20 @@
       });
       document.getElementById("hz").addEventListener("change", async (ev) => {
         apply(await control("frequency", { frequency: Number(ev.target.value) }));
+      });
+      document.getElementById("hz-rand").addEventListener("change", async (ev) => {
+        apply(await control("frequency_random", { enabled: ev.target.checked }));
+      });
+      document.querySelector(".bus-log").addEventListener("click", (ev) => {
+        const t = ev.target.closest("[data-rail]");
+        if (!t) return;
+        const rail = t.getAttribute("data-rail");
+        document.querySelectorAll("[data-rail]").forEach((b) => b.classList.toggle("active", b === t));
+        document.querySelector(".bus-log").classList.toggle("plots-open", rail === "plots");
+        document.getElementById("rail-title").textContent = rail === "plots" ? "Attack plots" : "Emitted messages";
+      });
+      document.getElementById("plot-attack").addEventListener("change", async () => {
+        try { renderPlots(await snap()); } catch (e) { /* keep last grid */ }
       });
       document.getElementById("sog").addEventListener("input", (ev) => {
         document.getElementById("sog-out").value = Number(ev.target.value).toFixed(1);

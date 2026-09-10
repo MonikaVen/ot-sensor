@@ -1,12 +1,11 @@
-import { archiveBounds, downloadCsv, EXPLORER_VIEW_MAX, filterLogs, filterSeries, logId, logSource, logsCsv, plotsCsv, stampName, talkerChoices, type ExplorerFilter, type LogSource } from "./explorer";
 import { ack, askAssistant, control, fetchAssistant, fetchSnapshot, updateRule } from "./api";
 import { assetMapSvg } from "./map";
-import { histogramPlot, linePlot, plotColors } from "./plot";
-import type { Alert, Asset, AssistantSession, FlowMessage, HistogramRow, HoneypotFeed, Incident, ModelPack, RuleClause, RulePack, Snapshot } from "./types";
+import { linePlot, plotColors } from "./plot";
+import type { Alert, Asset, AssistantSession, FlowMessage, HoneypotFeed, Incident, ModelPack, RuleClause, RulePack, Snapshot } from "./types";
 import "./styles.css";
 
 type Overlay = "comms" | "deps";
-type Page = "map" | "rules" | "models" | "plots" | "correlation" | "honeypot" | "assistant";
+type Page = "map" | "rules" | "models" | "correlation" | "honeypot" | "assistant";
 
 const SUGGESTED = [
   "Why did this incident fire?",
@@ -27,14 +26,6 @@ const state = {
   assistantDraft: "",
   assistantBusy: false,
   assistantError: null as string | null,
-  plots: {
-    from: "",
-    to: "",
-    source: "both" as LogSource,
-    talker: "",
-    selectedLogs: new Set<string>(),
-    selectedPlots: new Set<string>(),
-  },
 };
 
 function esc(s: string): string {
@@ -338,158 +329,6 @@ function modelsPageHtml(snap: Snapshot): string {
       </div>
     </div>
   </div>`;
-}
-
-function plotsFilter(): ExplorerFilter {
-  return { from: state.plots.from, to: state.plots.to, source: state.plots.source, talker: state.plots.talker };
-}
-
-function talkerSelectHtml(snap: Snapshot): string {
-  const choices = talkerChoices(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
-  return `<option value="" ${state.plots.talker === "" ? "selected" : ""}>All talkers</option>${choices
-    .map(
-      (t) =>
-        `<option value="${esc(t.sa)}" ${state.plots.talker === t.sa ? "selected" : ""}>SA ${esc(t.sa)} ${esc(t.name)}</option>`,
-    )
-    .join("")}`;
-}
-
-function explorerRows(snap: Snapshot): FlowMessage[] {
-  return filterLogs(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? [], plotsFilter());
-}
-
-function plotsGridHtml(snap: Snapshot): string {
-  const rows: HistogramRow[] = snap.histograms ?? [];
-  const filter = plotsFilter();
-  if (!rows.length) {
-    return `<p class="muted">Start the injector. Each plot bins benign vs attack samples for that overlay and updates every TAP tick.</p>`;
-  }
-  return rows
-    .map((h) => {
-      const benign = filterSeries(h.benign, filter, "benign");
-      const attack = filterSeries(h.attack, filter, "attack");
-      const checked = state.plots.selectedPlots.size === 0 || state.plots.selectedPlots.has(h.key);
-      return `<article class="hist-card ${h.active ? "detect" : ""}">
-        <label class="hist-pick"><input type="checkbox" data-plot-key="${esc(h.key)}" ${checked ? "checked" : ""} /> ${esc(h.label)}</label>
-        <p class="muted">${esc(h.technique || "")} · ${esc(h.unit || "")} · benign n=${benign.length} · attack n=${attack.length}${h.active ? " · live overlay" : ""}</p>
-        ${histogramPlot(benign, attack)}
-        <p class="plot-legend"><span><i class="swatch" style="background:#3caf7a"></i>benign</span><span><i class="swatch" style="background:#d45b4c"></i>attack</span></p>
-      </article>`;
-    })
-    .join("");
-}
-
-function explorerBodyHtml(snap: Snapshot): string {
-  const rows = explorerRows(snap);
-  if (!rows.length) {
-    return `<tr><td colspan="9" class="muted">No log rows in this window. Widen the datetime range, pick Both, or choose another talker.</td></tr>`;
-  }
-  return rows
-    .slice(0, EXPLORER_VIEW_MAX)
-    .map((m, i) => {
-      const id = logId(m, i);
-      const src = logSource(m);
-      const checked = state.plots.selectedLogs.has(id);
-      return `<tr class="${src === "attack" ? "attack" : ""}" data-log-row="${esc(id)}">
-        <td><input type="checkbox" data-log-id="${esc(id)}" ${checked ? "checked" : ""} /></td>
-        <td>${esc(fmtClock(m.t))}</td>
-        <td>${esc(src)}</td>
-        <td>SA ${esc(m.sa)} ${esc(m.name)}</td>
-        <td>PGN ${esc(String(m.pgn))}</td>
-        <td>${esc(m.pgn_name)}</td>
-        <td>${esc(m.technique || m.kind || "")}</td>
-        <td>${esc(m.summary)}</td>
-        <td class="hex">${esc(m.hex)}</td>
-      </tr>`;
-    })
-    .join("");
-}
-
-function explorerCountHtml(snap: Snapshot): string {
-  const n = explorerRows(snap).length;
-  const shown = Math.min(n, EXPLORER_VIEW_MAX);
-  const sel = state.plots.selectedLogs.size;
-  const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
-  const span = bounds ? ` · data ${bounds.from.replace("T", " ")} → ${bounds.to.replace("T", " ")}` : "";
-  const view = n > shown ? `showing ${shown} of ${n}` : `${n} row${n === 1 ? "" : "s"}`;
-  return `${view} in view · ${sel ? `${sel} selected` : "export uses all matching rows"}${span}`;
-}
-
-function plotsPageHtml(snap: Snapshot): string {
-  const live = snap.running ? "live" : "paused";
-  const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
-  const min = bounds?.from ?? "";
-  const max = bounds?.to ?? "";
-  return `<div class="models-page plots-page">
-    <div class="map-toolbar models-toolbar">
-      <h2>Plots</h2>
-      <p class="muted">Histograms refresh every TAP tick. Attack series uses GNSS spoof red. Check overlays and log rows, then export CSV.</p>
-      <span class="live-caption">${esc(live)} · tick ${snap.ticks}</span>
-    </div>
-    <form class="plots-explorer" data-plots-explorer>
-      <label>From <input type="datetime-local" step="1" data-plots-from min="${esc(min)}" max="${esc(max)}" value="${esc(state.plots.from)}" /></label>
-      <label>To <input type="datetime-local" step="1" data-plots-to min="${esc(min)}" max="${esc(max)}" value="${esc(state.plots.to)}" /></label>
-      <label>Source <select data-plots-source>
-        <option value="both" ${state.plots.source === "both" ? "selected" : ""}>Both</option>
-        <option value="benign" ${state.plots.source === "benign" ? "selected" : ""}>Benign</option>
-        <option value="attack" ${state.plots.source === "attack" ? "selected" : ""}>Attack</option>
-      </select></label>
-      <label>Talker <select data-plots-talker>${talkerSelectHtml(snap)}</select></label>
-      <button type="button" class="btn" data-ctrl="plots-fit">Fit data range</button>
-      <button type="button" class="btn" data-ctrl="plots-select-all">Select logs in view</button>
-      <button type="button" class="btn" data-ctrl="plots-clear">Clear selection</button>
-      <button type="button" class="btn" data-ctrl="export-csv">Export CSV</button>
-    </form>
-    <div class="plots-grid" id="plots-grid">${plotsGridHtml(snap)}</div>
-    <section class="explorer-panel">
-      <h2>Log explorer</h2>
-      <p class="muted" id="explorer-count">${explorerCountHtml(snap)}</p>
-      <div class="explorer-table-wrap">
-        <table class="explorer-table">
-          <thead>
-            <tr><th></th><th>Time</th><th>Source</th><th>Talker</th><th>PGN</th><th>Name</th><th>Technique</th><th>Summary</th><th>Hex</th></tr>
-          </thead>
-          <tbody id="explorer-tbody">${explorerBodyHtml(snap)}</tbody>
-        </table>
-      </div>
-    </section>
-  </div>`;
-}
-
-function patchPlotsLive(snap: Snapshot): void {
-  const grid = document.getElementById("plots-grid");
-  if (grid) grid.innerHTML = plotsGridHtml(snap);
-  const body = document.getElementById("explorer-tbody");
-  if (body) body.innerHTML = explorerBodyHtml(snap);
-  const count = document.getElementById("explorer-count");
-  if (count) count.textContent = explorerCountHtml(snap);
-  const talkerEl = document.querySelector("[data-plots-talker]");
-  if (talkerEl instanceof HTMLSelectElement && talkerEl !== document.activeElement) {
-    talkerEl.innerHTML = talkerSelectHtml(snap);
-    talkerEl.value = state.plots.talker;
-  }
-  const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
-  const fromEl = document.querySelector("[data-plots-from]");
-  const toEl = document.querySelector("[data-plots-to]");
-  if (bounds && fromEl instanceof HTMLInputElement) {
-    fromEl.min = bounds.from;
-    fromEl.max = bounds.to;
-  }
-  if (bounds && toEl instanceof HTMLInputElement) {
-    toEl.min = bounds.from;
-    toEl.max = bounds.to;
-  }
-}
-
-function exportSelected(snap: Snapshot): void {
-  const logs = explorerRows(snap);
-  const chosenLogs = logs.filter((m, i) => state.plots.selectedLogs.has(logId(m, i)));
-  const logRows = chosenLogs.length ? chosenLogs : logs;
-  downloadCsv(stampName("ot-sensor-logs"), logsCsv(logRows));
-  const plots = snap.histograms ?? [];
-  window.setTimeout(() => {
-    downloadCsv(stampName("ot-sensor-plots"), plotsCsv(plots, plotsFilter(), state.plots.selectedPlots));
-  }, 120);
 }
 
 function scoreLine(scores: Record<string, number> | undefined): string {
@@ -872,7 +711,6 @@ function render(): void {
           <button type="button" class="btn ${state.page === "map" ? "active" : ""}" data-page="map">Map</button>
           <button type="button" class="btn ${state.page === "rules" ? "active" : ""}" data-page="rules">Rules</button>
           <button type="button" class="btn ${state.page === "models" ? "active" : ""}" data-page="models">Models</button>
-          <button type="button" class="btn ${state.page === "plots" ? "active" : ""}" data-page="plots">Plots</button>
           <button type="button" class="btn ${state.page === "correlation" ? "active" : ""}" data-page="correlation">Correlation</button>
           <button type="button" class="btn ${state.page === "honeypot" ? "active" : ""}" data-page="honeypot">Honeypot</button>
           <button type="button" class="btn ${state.page === "assistant" ? "active" : ""}" data-page="assistant">Assistant</button>
@@ -883,7 +721,7 @@ function render(): void {
     ${snap ? healthHtml(snap) : ""}
     ${snap?.tap_error ? `<p class="banner">Simulator TAP ${esc(snap.tap_url || "")}: ${esc(snap.tap_error)}</p>` : ""}
     ${state.error ? `<p class="banner">${esc(state.error)} — start with ot-dashboard on :8443</p>` : ""}
-    <div class="main ${state.page === "rules" ? "rules-page" : ""} ${state.page === "models" || state.page === "plots" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant" ? "models-page-main" : ""}">
+    <div class="main ${state.page === "rules" ? "rules-page" : ""} ${state.page === "models" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant" ? "models-page-main" : ""}">
       ${
         state.page === "rules"
           ? snap
@@ -892,10 +730,6 @@ function render(): void {
           : state.page === "models"
             ? snap
               ? modelsPageHtml(snap)
-              : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
-          : state.page === "plots"
-            ? snap
-              ? plotsPageHtml(snap)
               : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
           : state.page === "correlation"
             ? snap
@@ -976,7 +810,7 @@ function bind(): void {
     const t = eventEl(ev);
     if (!t) return;
     const page = dataAttr(t.closest("[data-page]"), "page");
-    if (page === "map" || page === "rules" || page === "models" || page === "plots" || page === "correlation" || page === "honeypot" || page === "assistant") {
+    if (page === "map" || page === "rules" || page === "models" || page === "correlation" || page === "honeypot" || page === "assistant") {
       state.page = page as Page;
       render();
       if (page === "assistant") void loadAssistant();
@@ -1000,35 +834,6 @@ function bind(): void {
     }
     if (ctrl === "assistant-refresh") {
       void loadAssistant(true);
-      return;
-    }
-    if (ctrl === "export-csv") {
-      if (state.snap) exportSelected(state.snap);
-      return;
-    }
-    if (ctrl === "plots-fit") {
-      if (!state.snap) return;
-      const bounds = archiveBounds(state.snap.log_archive?.length ? state.snap.log_archive : state.snap.message_flow ?? []);
-      if (!bounds) return;
-      state.plots.from = bounds.from;
-      state.plots.to = bounds.to;
-      const fromEl = document.querySelector("[data-plots-from]");
-      const toEl = document.querySelector("[data-plots-to]");
-      if (fromEl instanceof HTMLInputElement) fromEl.value = bounds.from;
-      if (toEl instanceof HTMLInputElement) toEl.value = bounds.to;
-      patchPlotsLive(state.snap);
-      return;
-    }
-    if (ctrl === "plots-select-all") {
-      if (!state.snap) return;
-      explorerRows(state.snap).forEach((m, i) => state.plots.selectedLogs.add(logId(m, i)));
-      patchPlotsLive(state.snap);
-      return;
-    }
-    if (ctrl === "plots-clear") {
-      state.plots.selectedLogs.clear();
-      state.plots.selectedPlots.clear();
-      if (state.snap) patchPlotsLive(state.snap);
       return;
     }
     const ask = dataAttr(t.closest("[data-ask]"), "ask");
@@ -1064,58 +869,12 @@ function bind(): void {
     }
   });
   root.addEventListener("submit", (ev) => {
-    if (eventEl(ev)?.closest("[data-plots-explorer]")) {
-      ev.preventDefault();
-      return;
-    }
     if (!eventEl(ev)?.closest("[data-assistant-form]")) return;
     ev.preventDefault();
     void sendAssistant();
   });
   root.addEventListener("change", (ev) => {
     const t = eventEl(ev);
-    if (t instanceof HTMLInputElement && t.hasAttribute("data-plot-key")) {
-      const key = t.getAttribute("data-plot-key");
-      if (!key) return;
-      const keys = (state.snap?.histograms ?? []).map((h) => h.key);
-      if (state.plots.selectedPlots.size === 0) {
-        for (const k of keys) state.plots.selectedPlots.add(k);
-      }
-      if (t.checked) state.plots.selectedPlots.add(key);
-      else state.plots.selectedPlots.delete(key);
-      if (state.snap) patchPlotsLive(state.snap);
-      return;
-    }
-    if (t instanceof HTMLInputElement && t.hasAttribute("data-log-id")) {
-      const id = t.getAttribute("data-log-id");
-      if (!id) return;
-      if (t.checked) state.plots.selectedLogs.add(id);
-      else state.plots.selectedLogs.delete(id);
-      if (state.snap) {
-        const count = document.getElementById("explorer-count");
-        if (count) count.textContent = explorerCountHtml(state.snap);
-      }
-      return;
-    }
-    if (t instanceof HTMLSelectElement && t.hasAttribute("data-plots-talker")) {
-      state.plots.talker = t.value;
-      if (state.snap) patchPlotsLive(state.snap);
-      return;
-    }
-    if (t instanceof HTMLSelectElement && t.hasAttribute("data-plots-source")) {
-      const v = t.value;
-      if (v === "benign" || v === "attack" || v === "both") {
-        state.plots.source = v;
-        if (state.snap) patchPlotsLive(state.snap);
-      }
-      return;
-    }
-    if (t instanceof HTMLInputElement && (t.hasAttribute("data-plots-from") || t.hasAttribute("data-plots-to"))) {
-      if (t.hasAttribute("data-plots-from")) state.plots.from = t.value;
-      if (t.hasAttribute("data-plots-to")) state.plots.to = t.value;
-      if (state.snap) patchPlotsLive(state.snap);
-      return;
-    }
     const widget = t?.closest(".rules-widget");
     const ruleId = widget?.getAttribute("data-rule-id");
     if (!t || !widget || !ruleId) return;
@@ -1137,12 +896,6 @@ function bind(): void {
   });
   root.addEventListener("input", (ev) => {
     const t = eventEl(ev);
-    if (t instanceof HTMLInputElement && (t.hasAttribute("data-plots-from") || t.hasAttribute("data-plots-to"))) {
-      if (t.hasAttribute("data-plots-from")) state.plots.from = t.value;
-      if (t.hasAttribute("data-plots-to")) state.plots.to = t.value;
-      if (state.snap) patchPlotsLive(state.snap);
-      return;
-    }
     if (t instanceof HTMLTextAreaElement && t.closest("[data-assistant-form]")) {
       state.assistantDraft = t.value;
       return;
@@ -1266,14 +1019,6 @@ async function pull(): Promise<void> {
     state.error = null;
     state.toastId = state.toastId ?? next.new_incident_ids[0] ?? null;
     state.selectedIncident = state.selectedIncident ?? next.incidents[0]?.incident_id ?? null;
-    if (state.page === "plots" && document.querySelector(".plots-page")) {
-      const health = document.querySelector(".health-row");
-      if (health) health.outerHTML = healthHtml(next);
-      const cap = document.querySelector(".plots-page .live-caption");
-      if (cap) cap.textContent = `${next.running ? "live" : "paused"} · tick ${next.ticks}`;
-      patchPlotsLive(next);
-      return;
-    }
     if (editingRule()) {
       patchRuleLive(next);
       return;
@@ -1284,14 +1029,14 @@ async function pull(): Promise<void> {
     const y =
       state.page === "rules"
         ? (document.querySelector(".map-col")?.scrollTop ?? 0)
-        : state.page === "models" || state.page === "plots" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant"
+        : state.page === "models" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant"
           ? (document.querySelector(".main")?.scrollTop ?? 0)
           : 0;
     render();
     if (state.page === "rules") {
       const col = document.querySelector(".map-col");
       if (col) col.scrollTop = y;
-    } else if (state.page === "models" || state.page === "plots" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant") {
+    } else if (state.page === "models" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant") {
       const main = document.querySelector(".main");
       if (main) main.scrollTop = y;
     }

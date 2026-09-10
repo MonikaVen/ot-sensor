@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import random
 
 from opv_sim.runtime import SimRuntime
 from opv_sim.twins import ATTACK_CATALOG, DEVICE_CATALOG
@@ -122,8 +123,11 @@ def test_sim_control_api_sets_attack():
         assert "#log li.attack" in r.text
         assert "#log li.spoofed" in r.text
         assert "#d45b4c" in r.text
-        assert 'data-rail="plots"' not in r.text
-        assert 'id="plots-grid"' not in r.text
+        assert 'data-rail="plots"' in r.text
+        assert 'id="plots-grid"' in r.text
+        assert "All attacks" in r.text
+        assert 'id="hz-rand"' in r.text
+        assert "GNSS-1 spoof" in r.text
         assert 'data-sa="40"' in r.text
         assert 'data-sa="48"' in r.text
         assert 'data-sa="28"' in r.text
@@ -302,6 +306,28 @@ def test_frequency_repeats_spoof_in_attack_log():
     assert len(frames) == 1
 
 
+def test_frequency_randomize_varies_hz():
+    random.seed(1)
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    rt.set_frequency_random(True)
+    assert rt.frequency_random is True
+    seen = {rt.frequency}
+    for _ in range(20):
+        rt.tick()
+        seen.add(rt.frequency)
+        assert 1 <= rt.frequency <= 32
+    assert len(seen) > 1
+    snap = rt.snapshot()
+    assert snap["frequency_random"] is True
+    assert snap["frequency"] in seen
+    rt.set_frequency(9)
+    assert rt.frequency_random is False
+    assert rt.frequency == 9
+    rt.tick()
+    assert rt.frequency == 9
+
+
 def test_new_mitre_overlays():
     rt = SimRuntime("dev", "")
     rt.set_attack("spoof", False)
@@ -366,6 +392,9 @@ def test_frequency_control_api():
     with TestClient(app) as client:
         r = client.post("/api/control", json={"action": "frequency", "frequency": 7})
         assert r.json()["snapshot"]["frequency"] == 7
+        assert r.json()["snapshot"]["frequency_random"] is False
+        r = client.post("/api/control", json={"action": "frequency_random", "enabled": True})
+        assert r.json()["snapshot"]["frequency_random"] is True
         r = client.post("/api/control", json={"action": "toggle_attack", "attack": "rogue_master", "enabled": True})
         assert r.json()["snapshot"]["attacks"]["rogue_master"] is True
         assert r.json()["snapshot"]["attack_id"] == "rogue-master"
