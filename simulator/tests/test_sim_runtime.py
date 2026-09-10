@@ -142,6 +142,9 @@ def test_sim_control_api_sets_attack():
         assert 'id="collective-svg"' in r.text
         assert "Benign and attacks" in r.text
         assert 'id="hz-rand"' in r.text
+        assert 'id="hz-mode"' in r.text
+        assert "Randomize" in r.text
+        assert "Injection" in r.text
         assert "GNSS-1 spoof" in r.text
         assert 'data-sa="40"' in r.text
         assert 'data-sa="48"' in r.text

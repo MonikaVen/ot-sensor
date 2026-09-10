@@ -29,11 +29,6 @@
         align-items: flex-end; padding: 16px 20px; border-bottom: 1px solid var(--stroke);
         background: var(--panel); flex-shrink: 0;
       }
-      header {
-        display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between;
-        align-items: flex-end; padding: 16px 20px; border-bottom: 1px solid var(--stroke);
-        background: var(--panel); flex-shrink: 0;
-      }
       .ownship {
         display: flex; flex-wrap: wrap; align-items: center; gap: 20px 28px;
         padding: 10px 16px 12px; border-top: 1px solid var(--stroke);
@@ -51,10 +46,17 @@
       h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
       #stats { display: flex; gap: 18px; margin: 0; flex-wrap: wrap; align-items: end; }
       #stats .stat-slider { min-width: 148px; }
-      #stats .stat-slider dd { margin-top: 6px; }
+      #stats .stat-slider.hz-slider { min-width: 220px; }
+      #stats .stat-slider dd { margin-top: 6px; display: flex; align-items: center; gap: 8px; }
       #stats .stat-slider input[type="range"] { width: 100%; accent-color: var(--accent); height: 4px; }
+      #stats .stat-slider input[type="range"]:disabled { opacity: 0.35; }
       #stats output { color: var(--text); font-variant-numeric: tabular-nums; }
       #stats .count { color: var(--muted); font-weight: 400; font-size: 11px; }
+      #stats .rand {
+        display: flex; align-items: center; gap: 5px; white-space: nowrap;
+        color: var(--text); font-size: 12px; cursor: pointer;
+      }
+      #stats .rand input { accent-color: var(--accent); }
       dt { font-size: 11px; color: var(--muted); }
       dd { margin: 0; font-size: 15px; }
       .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -209,15 +211,7 @@
       .switch input { accent-color: var(--ok); width: 16px; height: 16px; }
       .switch.attack input { accent-color: var(--bad); }
       .switch small { color: var(--muted); font-size: 10px; }
-      .freq {
-        display: flex; align-items: center; gap: 12px; margin: 0 0 10px;
-        font-size: 12px; color: var(--muted);
-      }
-      .freq label { display: flex; align-items: center; gap: 8px; min-width: 110px; }
-      .freq output { color: var(--bad); font-variant-numeric: tabular-nums; font-weight: 600; }
-      .freq input[type="range"] { flex: 1; accent-color: var(--bad); height: 4px; }
-      .freq .rand { display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; color: var(--text); }
-      .freq .rand input { accent-color: var(--bad); }
+      .attacks-hint { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 0 0 10px; }
       @keyframes flash {
         0% { background: #1c3a28; border-color: var(--ok); box-shadow: 0 0 14px #3caf7a88; }
         100% { background: var(--bg); border-color: var(--stroke); box-shadow: none; }
@@ -255,6 +249,17 @@
         <div class="stat-slider">
           <dt><label for="frames">Frames <output id="frames-out">1</output>× <span class="count" id="stat-frames-n"></span></label></dt>
           <dd><input type="range" id="frames" min="1" max="32" step="1" value="1" /></dd>
+        </div>
+        <div class="stat-slider hz-slider">
+          <dt>
+            <label for="hz">Injection <output id="hz-out">16</output> Hz
+              <span class="count" id="hz-mode"></span>
+            </label>
+          </dt>
+          <dd>
+            <input type="range" id="hz" min="1" max="32" step="1" value="16" title="Attack frames per plant tick" />
+            <label class="rand"><input type="checkbox" id="hz-rand" /> Randomize</label>
+          </dd>
         </div>
       </dl>
       <div class="controls">
@@ -362,11 +367,7 @@
       <footer class="bottom">
         <section class="box" id="attacks">
           <h2>Attacks</h2>
-          <div class="freq">
-            <label for="hz">Frequency <output id="hz-out">16</output> Hz</label>
-            <input type="range" id="hz" min="1" max="32" step="1" value="16" />
-            <label class="rand"><input type="checkbox" id="hz-rand" /> Randomize</label>
-          </div>
+          <p class="attacks-hint">Injection Hz is in the header. Randomize picks a new rate (1–32) each plant tick.</p>
           <div class="toggles">
             <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002 · 129025</small></label>
             <label class="switch attack"><input type="checkbox" data-attack="spoof_both" /> GNSS-1+2 spoof <small>T1692.002 · gps-spoof-both</small></label>
@@ -821,14 +822,18 @@
         });
         const hz = document.getElementById("hz");
         const hzOut = document.getElementById("hz-out");
+        const hzRand = document.getElementById("hz-rand");
+        const hzMode = document.getElementById("hz-mode");
+        const randomized = !!s.frequency_random;
         if (hz && document.activeElement !== hz && s.frequency != null) {
           hz.value = String(s.frequency);
           if (hzOut) hzOut.value = String(s.frequency);
         }
-        const hzRand = document.getElementById("hz-rand");
+        if (hz) hz.disabled = randomized;
         if (hzRand && document.activeElement !== hzRand) {
-          hzRand.checked = !!s.frequency_random;
+          hzRand.checked = randomized;
         }
+        if (hzMode) hzMode.textContent = randomized ? "randomized each tick" : "";
         const sog = document.getElementById("sog");
         const sogOut = document.getElementById("sog-out");
         if (sog && document.activeElement !== sog && s.sog_kn != null) {

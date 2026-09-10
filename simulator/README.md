@@ -59,12 +59,12 @@ Open http://127.0.0.1:8444
 
 | Route | Role |
 | --- | --- |
-| `GET /` | Injector UI (MITRE overlays + frequency slider) |
+| `GET /` | Injector UI (MITRE overlays + header injection Hz / randomize) |
 | `GET /api/tap` | Listen-only frames for `ot-dashboard` |
 | `POST /api/control` | `toggle_attack`, `frequency`, `frequency_random`, `reset`, `start`, `pause` |
 | `GET /api/health` | `mode` + `attack_id` |
 
-Frequency (1–32 Hz) sizes flood bursts and repeats spoofed talker rows in the attack log. Check **Randomize** to pick a new Hz each tick; moving the slider turns randomize off and locks that rate. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).
+Injection frequency (1–32 Hz, header slider next to SOG/Frames) sizes flood bursts and repeats spoofed talker rows in the attack log. Check **Randomize** to pick a new Hz each plant tick; the live readout follows the random rate. Moving the slider turns randomize off and locks that rate. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).
 
 The right rail is the live message log. **Plots** is a header tab beside Start/Pause. One collective chart updates every plant tick (benign plus each named attack). **Export CSV** (header, next to Plots) saves each NMEA 2000 command (`PGN …`) with its attack label (`benign`, `GNSS-1 spoof`, …).
 
