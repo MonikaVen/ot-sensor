@@ -49,7 +49,8 @@ def _iso(v):
 
 def _edge_key(src, dst, seg) -> tuple:
     dest = None if dst in (None, "", "255", 255) else str(dst)
-    return (str(src or ""), dest, str(seg or ""))
+    src_s = "" if src is None or src == "" else str(src)
+    return (src_s, dest, str(seg or ""))
 
 
 def _row_issue(row: dict) -> str | None:
@@ -66,10 +67,12 @@ def _comms_tick_stats(frames, plant, attacks: dict | None) -> dict[tuple, dict]:
     out: dict[tuple, dict] = {}
     for fr in frames or []:
         fields = decode_fields(fr)
-        src = str(fields.get("sa") or "")
-        if not src:
+        sa = fields.get("sa")
+        if sa is None:
             continue
-        key = _edge_key(src, fields.get("da"), getattr(fr, "segment", "") or "")
+        key = _edge_key(sa, fields.get("da"), getattr(fr, "segment", "") or "")
+        if not key[0]:
+            continue
         slot = out.setdefault(key, {"hits": 0, "issue": None})
         slot["hits"] += 1
         issue = _row_issue(emission_row(fr, plant, attacks))
