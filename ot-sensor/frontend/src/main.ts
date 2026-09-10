@@ -1,4 +1,4 @@
-import { downloadCsv, filterLogs, filterSeries, logId, logSource, logsCsv, plotsCsv, stampName, type ExplorerFilter, type LogSource } from "./explorer";
+import { archiveBounds, downloadCsv, filterLogs, filterSeries, logId, logSource, logsCsv, plotsCsv, stampName, type ExplorerFilter, type LogSource } from "./explorer";
 import { ack, askAssistant, control, fetchAssistant, fetchSnapshot, updateRule } from "./api";
 import { assetMapSvg } from "./map";
 import { histogramPlot, linePlot, plotColors } from "./plot";
@@ -395,11 +395,16 @@ function explorerBodyHtml(snap: Snapshot): string {
 function explorerCountHtml(snap: Snapshot): string {
   const n = explorerRows(snap).length;
   const sel = state.plots.selectedLogs.size;
-  return `${n} row${n === 1 ? "" : "s"} in view · ${sel ? `${sel} selected` : "export uses all rows in view"} · plots ${sel ? "use checked overlays" : "export all overlays"}`;
+  const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
+  const span = bounds ? ` · data ${bounds.from.replace("T", " ")} → ${bounds.to.replace("T", " ")}` : "";
+  return `${n} row${n === 1 ? "" : "s"} in view · ${sel ? `${sel} selected` : "export uses all rows in view"}${span}`;
 }
 
 function plotsPageHtml(snap: Snapshot): string {
   const live = snap.running ? "live" : "paused";
+  const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
+  const min = bounds?.from ?? "";
+  const max = bounds?.to ?? "";
   return `<div class="models-page plots-page">
     <div class="map-toolbar models-toolbar">
       <h2>Plots</h2>
@@ -407,13 +412,14 @@ function plotsPageHtml(snap: Snapshot): string {
       <span class="live-caption">${esc(live)} · tick ${snap.ticks}</span>
     </div>
     <form class="plots-explorer" data-plots-explorer>
-      <label>From <input type="datetime-local" step="1" data-plots-from value="${esc(state.plots.from)}" /></label>
-      <label>To <input type="datetime-local" step="1" data-plots-to value="${esc(state.plots.to)}" /></label>
+      <label>From <input type="datetime-local" step="1" data-plots-from min="${esc(min)}" max="${esc(max)}" value="${esc(state.plots.from)}" /></label>
+      <label>To <input type="datetime-local" step="1" data-plots-to min="${esc(min)}" max="${esc(max)}" value="${esc(state.plots.to)}" /></label>
       <label>Source <select data-plots-source>
         <option value="both" ${state.plots.source === "both" ? "selected" : ""}>Both</option>
         <option value="benign" ${state.plots.source === "benign" ? "selected" : ""}>Benign</option>
         <option value="attack" ${state.plots.source === "attack" ? "selected" : ""}>Attack</option>
       </select></label>
+      <button type="button" class="btn" data-ctrl="plots-fit">Fit data range</button>
       <button type="button" class="btn" data-ctrl="plots-select-all">Select logs in view</button>
       <button type="button" class="btn" data-ctrl="plots-clear">Clear selection</button>
       <button type="button" class="btn" data-ctrl="export-csv">Export CSV</button>
@@ -441,6 +447,17 @@ function patchPlotsLive(snap: Snapshot): void {
   if (body) body.innerHTML = explorerBodyHtml(snap);
   const count = document.getElementById("explorer-count");
   if (count) count.textContent = explorerCountHtml(snap);
+  const bounds = archiveBounds(snap.log_archive?.length ? snap.log_archive : snap.message_flow ?? []);
+  const fromEl = document.querySelector("[data-plots-from]");
+  const toEl = document.querySelector("[data-plots-to]");
+  if (bounds && fromEl instanceof HTMLInputElement) {
+    fromEl.min = bounds.from;
+    fromEl.max = bounds.to;
+  }
+  if (bounds && toEl instanceof HTMLInputElement) {
+    toEl.min = bounds.from;
+    toEl.max = bounds.to;
+  }
 }
 
 function exportSelected(snap: Snapshot): void {
@@ -966,6 +983,19 @@ function bind(): void {
     }
     if (ctrl === "export-csv") {
       if (state.snap) exportSelected(state.snap);
+      return;
+    }
+    if (ctrl === "plots-fit") {
+      if (!state.snap) return;
+      const bounds = archiveBounds(state.snap.log_archive?.length ? state.snap.log_archive : state.snap.message_flow ?? []);
+      if (!bounds) return;
+      state.plots.from = bounds.from;
+      state.plots.to = bounds.to;
+      const fromEl = document.querySelector("[data-plots-from]");
+      const toEl = document.querySelector("[data-plots-to]");
+      if (fromEl instanceof HTMLInputElement) fromEl.value = bounds.from;
+      if (toEl instanceof HTMLInputElement) toEl.value = bounds.to;
+      patchPlotsLive(state.snap);
       return;
     }
     if (ctrl === "plots-select-all") {

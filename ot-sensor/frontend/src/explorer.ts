@@ -136,6 +136,22 @@ export function plotsCsv(rows: HistogramRow[], filter: ExplorerFilter, selected:
   return toCsv(headers, out);
 }
 
+export function isoToLocalInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+export function archiveBounds(rows: FlowMessage[]): { from: string; to: string } | null {
+  const times = rows.map((r) => Date.parse(r.t)).filter((n) => Number.isFinite(n));
+  if (!times.length) return null;
+  return {
+    from: isoToLocalInput(new Date(Math.min(...times)).toISOString()),
+    to: isoToLocalInput(new Date(Math.max(...times)).toISOString()),
+  };
+}
+
 export function stampName(prefix: string): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
