@@ -59,10 +59,12 @@ Open http://127.0.0.1:8444
 
 | Route | Role |
 | --- | --- |
-| `GET /` | Injector UI (arm spoof / gyro / velocity / flood) |
+| `GET /` | Injector UI (MITRE overlays + frequency slider) |
 | `GET /api/tap` | Listen-only frames for `ot-dashboard` |
-| `POST /api/control` | `toggle_attack`, `reset`, `start`, `pause` |
+| `POST /api/control` | `toggle_attack`, `frequency`, `reset`, `start`, `pause` |
 | `GET /api/health` | `mode` + `attack_id` |
+
+Frequency (1–32 Hz) sizes flood bursts and repeats spoofed talker rows in the attack log. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).
 
 Attach the sensor:
 

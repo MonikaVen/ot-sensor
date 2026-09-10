@@ -50,9 +50,48 @@ class ScenarioEngine:
         elif self.attack_id in ("sog-spoof", "velocity"):
             phase = "inject"
             attack = "sog-spoof"
+        elif self.attack_id in ("ais-spoof", "ais"):
+            phase = "inject"
+            attack = "ais-spoof"
+        elif self.attack_id in ("rot-spoof", "rot"):
+            phase = "inject"
+            attack = "rot-spoof"
+        elif self.attack_id in ("rpm-spoof", "rpm"):
+            phase = "inject"
+            attack = "rpm-spoof"
+        elif self.attack_id in ("depth-spoof", "depth"):
+            phase = "inject"
+            attack = "depth-spoof"
+        elif self.attack_id in ("battery-spoof", "battery"):
+            phase = "inject"
+            attack = "battery-spoof"
+        elif self.attack_id in ("engine-cmd", "engine_cmd"):
+            phase = "inject"
+            attack = "engine-cmd"
+        elif self.attack_id in ("rogue-master", "rogue_master", "gps-spoof-sa-collision"):
+            phase = "inject"
+            attack = "rogue-master"
+        elif self.attack_id in ("gateway-bypass", "gateway_bypass"):
+            phase = "inject"
+            attack = "gateway-bypass"
+        elif self.attack_id in ("error-flood", "error_flood"):
+            phase = "flood"
+            attack = "error-flood"
+        elif self.attack_id in ("fast-packet", "fast_packet"):
+            phase = "flood"
+            attack = "fast-packet"
         elif self.attack_id == "pgn-flood":
             phase = "flood"
             attack = "pgn-flood"
+        elif self.attack_id in ("gps-spoof-both", "spoof_both"):
+            if elapsed_s < 5:
+                phase = "baseline"
+            elif elapsed_s < 25:
+                phase = "ramp"
+                attack = "gps-spoof-both"
+            else:
+                phase = "hold"
+                attack = "gps-spoof-both"
         t = self.t0 + timedelta(seconds=elapsed_s)
         return PlantState(
             t=t,

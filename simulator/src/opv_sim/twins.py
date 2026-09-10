@@ -6,13 +6,19 @@ from otlab import CanFrame, LabelRecord, PlantState
 from otlab.bus import InMemoryCanBus
 from otlab.geo import dest_point
 from otlab.pgn import (
+    encode_ais_position,
+    encode_battery,
     encode_claim,
     encode_cog_sog,
+    encode_depth,
     encode_dops,
+    encode_engine_control,
+    encode_error_frame,
     encode_heading,
     encode_heading_control,
     encode_iso_request,
     encode_position,
+    encode_rate_of_turn,
     encode_rpm,
     encode_sats,
     decode_fields,
@@ -21,20 +27,104 @@ from otlab.can import unpack_id
 
 NAV_TO_PROP = {127250, 129026, 126992}
 ROGUE_SA = 44
-FLOOD_N = 16
+FREQ_MIN = 1
+FREQ_MAX = 32
+FREQ_DEFAULT = 16
 GYRO_HEADING_OFFSET_DEG = 40.0
+ROT_OFFSET_DEG_S = 8.0
 VEL_SOG_OFFSET_KN = 8.0
-ATTACK_KEYS = ("spoof", "gyro", "velocity", "read", "write", "read_flood", "write_flood", "pgn_flood")
+RPM_OFFSET = 420.0
+DEPTH_OFFSET_M = 12.0
+BATTERY_VOLTS = 11.2
+TRUE_BATTERY_VOLTS = 28.0
+
+ATTACK_KEYS = (
+    "spoof",
+    "spoof_both",
+    "ais",
+    "gyro",
+    "rot",
+    "velocity",
+    "rpm",
+    "depth",
+    "battery",
+    "read",
+    "write",
+    "engine_cmd",
+    "read_flood",
+    "write_flood",
+    "pgn_flood",
+    "error_flood",
+    "fast_packet",
+    "rogue_master",
+    "gateway_bypass",
+)
+
 ATTACK_IDS = {
     "spoof": "gps-spoof-primary",
+    "spoof_both": "gps-spoof-both",
+    "ais": "ais-spoof",
     "gyro": "heading-spoof",
+    "rot": "rot-spoof",
     "velocity": "sog-spoof",
+    "rpm": "rpm-spoof",
+    "depth": "depth-spoof",
+    "battery": "battery-spoof",
     "read": "read",
     "write": "write",
+    "engine_cmd": "engine-cmd",
     "read_flood": "read-flood",
     "write_flood": "write-flood",
     "pgn_flood": "pgn-flood",
+    "error_flood": "error-flood",
+    "fast_packet": "fast-packet",
+    "rogue_master": "rogue-master",
+    "gateway_bypass": "gateway-bypass",
 }
+
+ATTACK_TECHNIQUES = {
+    "spoof": "T1692.002",
+    "spoof_both": "T1692.002",
+    "ais": "T1692.002",
+    "gyro": "T1692.002",
+    "rot": "T1692.002",
+    "velocity": "T1692.002",
+    "rpm": "T1692.002",
+    "depth": "T1692.002",
+    "battery": "T1692.002",
+    "read": "T0801",
+    "write": "T1692.001",
+    "engine_cmd": "T1692.001",
+    "read_flood": "T0814",
+    "write_flood": "T0814",
+    "pgn_flood": "T0814",
+    "error_flood": "T0814",
+    "fast_packet": "T0814",
+    "rogue_master": "T0848",
+    "gateway_bypass": "T1692",
+}
+
+ATTACK_CATALOG = [
+    ("spoof", "GNSS-1 spoof", "T1692.002", "129025"),
+    ("spoof_both", "GNSS-1+2 spoof", "T1692.002", "gps-spoof-both"),
+    ("ais", "AIS spoof", "T1692.002", "129038"),
+    ("gyro", "Gyro spoof", "T1692.002", "127250"),
+    ("rot", "ROT spoof", "T1692.002", "127251"),
+    ("velocity", "Velocity spoof", "T1692.002", "129026 SOG"),
+    ("rpm", "RPM spoof", "T1692.002", "127488"),
+    ("depth", "Depth spoof", "T1692.002", "128267"),
+    ("battery", "Battery spoof", "T1692.002", "127508"),
+    ("read", "Read", "T0801", "ISO Request 59904"),
+    ("write", "Write", "T1692.001 · T0855", "127237"),
+    ("engine_cmd", "Engine command", "T1692.001", "126208"),
+    ("read_flood", "Read flood", "T0814", "ISO Request burst"),
+    ("write_flood", "Write flood", "T0814", "127237 burst"),
+    ("pgn_flood", "PGN flood", "T0814", "heading burst"),
+    ("error_flood", "Error flood", "T0814", "error frames"),
+    ("fast_packet", "Fast Packet flood", "T0814", "129029 exhaustion"),
+    ("rogue_master", "Rogue Master", "T0848", "SA 16 NAME theft"),
+    ("gateway_bypass", "Gateway bypass", "T1692", "RPM onto nav"),
+]
 
 # sa, segment, name, default_on
 DEVICE_CATALOG = [
@@ -53,6 +143,14 @@ DEVICE_CATALOG = [
 ]
 
 
+def clamp_frequency(hz: float | int | None) -> int:
+    try:
+        value = int(round(float(hz)))
+    except (TypeError, ValueError):
+        return FREQ_DEFAULT
+    return max(FREQ_MIN, min(FREQ_MAX, value))
+
+
 def default_devices() -> dict[str, bool]:
     return {str(sa): on for sa, _seg, _name, on in DEVICE_CATALOG}
 
@@ -66,10 +164,32 @@ def attacks_for(attack_id: str | None) -> dict[str, bool]:
     aid = attack_id or ""
     if aid in ("gps-spoof-primary", "gps-spoof-underway"):
         on["spoof"] = True
+    elif aid in ("gps-spoof-both", "spoof_both"):
+        on["spoof_both"] = True
     elif aid in ("heading-spoof", "gyro"):
         on["gyro"] = True
     elif aid in ("sog-spoof", "velocity"):
         on["velocity"] = True
+    elif aid in ("ais-spoof", "ais"):
+        on["ais"] = True
+    elif aid in ("rot-spoof", "rot"):
+        on["rot"] = True
+    elif aid in ("rpm-spoof", "rpm"):
+        on["rpm"] = True
+    elif aid in ("depth-spoof", "depth"):
+        on["depth"] = True
+    elif aid in ("battery-spoof", "battery"):
+        on["battery"] = True
+    elif aid in ("engine-cmd", "engine_cmd"):
+        on["engine_cmd"] = True
+    elif aid in ("rogue-master", "rogue_master", "gps-spoof-sa-collision"):
+        on["rogue_master"] = True
+    elif aid in ("gateway-bypass", "gateway_bypass"):
+        on["gateway_bypass"] = True
+    elif aid in ("error-flood", "error_flood"):
+        on["error_flood"] = True
+    elif aid in ("fast-packet", "fast_packet"):
+        on["fast_packet"] = True
     elif aid == "pgn-flood":
         on["pgn_flood"] = True
     elif aid in ATTACK_KEYS:
@@ -104,26 +224,59 @@ class AttackInjector:
     def __init__(self, sim_mode: str = "dev") -> None:
         self.sim_mode = sim_mode
         self.intensity = 1.0
+        self.frequency = FREQ_DEFAULT
         self.attacks = default_attacks(False)
         self.labels: list[LabelRecord] = []
 
+    def burst_n(self) -> int:
+        return clamp_frequency(self.frequency)
+
+    def gnss_spoof_on(self) -> bool:
+        return bool((self.attacks.get("spoof") or self.attacks.get("spoof_both")) and self.intensity > 0)
+
     def spoof_gnss1(self, plant: PlantState) -> tuple[float, float, float]:
-        if not self.attacks.get("spoof") or self.intensity <= 0:
+        if not self.gnss_spoof_on():
             return plant.lat_deg, plant.lon_deg, plant.cog_deg
         offset_m = 120.0 * self.intensity
         cog_off = 25.0 * self.intensity
         lat, lon = dest_point(plant.lat_deg, plant.lon_deg, plant.heading_deg + 90.0, offset_m)
         return lat, lon, (plant.cog_deg + cog_off) % 360.0
 
+    def spoof_ais(self, plant: PlantState) -> tuple[float, float]:
+        if not self.attacks.get("ais"):
+            return plant.lat_deg, plant.lon_deg
+        return dest_point(plant.lat_deg, plant.lon_deg, plant.heading_deg + 45.0, 80.0)
+
     def spoof_heading(self, plant: PlantState) -> float:
         if not self.attacks.get("gyro"):
             return plant.heading_deg
         return (plant.heading_deg + GYRO_HEADING_OFFSET_DEG) % 360.0
 
+    def spoof_rot(self, plant: PlantState) -> float:
+        if not self.attacks.get("rot"):
+            return plant.rot_deg_s
+        return plant.rot_deg_s + ROT_OFFSET_DEG_S
+
     def spoof_sog(self, plant: PlantState) -> float:
         if not self.attacks.get("velocity"):
             return plant.sog_kn
         return max(0.0, plant.sog_kn + VEL_SOG_OFFSET_KN)
+
+    def spoof_rpm(self, plant: PlantState, which: str = "port") -> float:
+        base = plant.rpm_port if which == "port" else plant.rpm_stbd
+        if not self.attacks.get("rpm"):
+            return base
+        return base + RPM_OFFSET
+
+    def spoof_depth(self, plant: PlantState) -> float:
+        if not self.attacks.get("depth"):
+            return plant.depth_m
+        return plant.depth_m + DEPTH_OFFSET_M
+
+    def spoof_battery(self) -> float:
+        if not self.attacks.get("battery"):
+            return TRUE_BATTERY_VOLTS
+        return BATTERY_VOLTS
 
     def reported(self, plant: PlantState | None) -> dict | None:
         if plant is None:
@@ -149,20 +302,26 @@ class AttackInjector:
         technique: str = "T1692.002",
         attack_id: str | None = None,
         scenario_id: str | None = None,
+        segment: str = "nav",
+        copies: int | None = None,
     ) -> LabelRecord | None:
         if self.sim_mode != "dev":
             return None
-        rec = LabelRecord(
-            t=plant.t,
-            scenario_id=scenario_id or plant.scenario_id or "underway",
-            attack_id=attack_id or plant.attack_id or "gps-spoof-primary",
-            technique=technique,
-            victim_sa=sa,
-            pgn=pgn,
-            segment="nav",
-            phase=plant.phase,
-        )
-        self.labels.append(rec)
+        n = max(1, copies if copies is not None else 1)
+        rec = None
+        for _ in range(n):
+            rec = LabelRecord(
+                t=plant.t,
+                scenario_id=scenario_id or plant.scenario_id or "underway",
+                attack_id=attack_id or plant.attack_id or "gps-spoof-primary",
+                technique=technique,
+                victim_sa=sa,
+                pgn=pgn,
+                segment=segment,
+                phase=plant.phase,
+                frequency_hz=self.burst_n(),
+            )
+            self.labels.append(rec)
         return rec
 
 
@@ -185,8 +344,13 @@ class DeviceTwins:
         self.bus.send(enc)
         frames.append(enc)
 
+    def _burst(self, frames: list[CanFrame], make) -> None:
+        for _ in range(self.injector.burst_n()):
+            self._emit(frames, make())
+
     def publish(self, plant: PlantState) -> list[CanFrame]:
         frames: list[CanFrame] = []
+        n = self.injector.burst_n()
         for sa, seg, name, _on in DEVICE_CATALOG:
             if self._on(sa) and sa not in self.claimed:
                 self._emit(frames, encode_claim(plant.t, seg, sa, name[:8]))
@@ -205,68 +369,212 @@ class DeviceTwins:
             ):
                 self._emit(frames, enc)
                 pgn = decode_fields(enc)["pgn"]
-                if self.injector.attacks.get("spoof") and self.injector.intensity > 0:
+                if self.injector.gnss_spoof_on():
                     self.injector.record_label(
                         plant,
                         pgn,
                         16,
-                        attack_id="gps-spoof-primary",
+                        technique="T1692.002",
+                        attack_id="gps-spoof-both" if self.injector.attacks.get("spoof_both") else "gps-spoof-primary",
                         scenario_id="gps-spoof-underway",
+                        copies=n,
                     )
                 elif self.injector.attacks.get("velocity") and pgn == 129026:
                     self.injector.record_label(
                         plant,
                         129026,
                         16,
+                        technique="T1692.002",
                         attack_id="sog-spoof",
                         scenario_id="underway",
+                        copies=n,
                     )
+        lat2, lon2, cog2 = (lat1, lon1, cog1) if self.injector.attacks.get("spoof_both") and self.injector.intensity > 0 else (
+            plant.lat_deg,
+            plant.lon_deg,
+            plant.cog_deg,
+        )
+        sog2 = sog1 if self.injector.attacks.get("spoof_both") else plant.sog_kn
         if self._on(17):
             for enc in (
-                encode_position(plant.t, "nav", 17, plant.lat_deg, plant.lon_deg),
-                encode_cog_sog(plant.t, "nav", 17, plant.cog_deg, plant.sog_kn),
+                encode_position(plant.t, "nav", 17, lat2, lon2),
+                encode_cog_sog(plant.t, "nav", 17, cog2, sog2),
                 encode_dops(plant.t, "nav", 17, plant.hdop),
-                encode_sats(plant.t, "nav", 17, plant.sat_count, plant.lat_deg, plant.lon_deg),
+                encode_sats(plant.t, "nav", 17, plant.sat_count, lat2, lon2),
             ):
                 self._emit(frames, enc)
+                if self.injector.attacks.get("spoof_both") and self.injector.intensity > 0:
+                    self.injector.record_label(
+                        plant,
+                        decode_fields(enc)["pgn"],
+                        17,
+                        technique="T1692.002",
+                        attack_id="gps-spoof-both",
+                        scenario_id="gps-spoof-underway",
+                        copies=n,
+                    )
         heading = self.injector.spoof_heading(plant)
+        rot = self.injector.spoof_rot(plant)
         if self._on(35):
             self._emit(frames, encode_heading(plant.t, "nav", 35, heading))
+            self._emit(frames, encode_rate_of_turn(plant.t, "nav", 35, rot))
             if self.injector.attacks.get("gyro"):
                 self.injector.record_label(
                     plant,
                     127250,
                     35,
+                    technique="T1692.002",
                     attack_id="heading-spoof",
                     scenario_id="underway",
+                    copies=n,
                 )
+            if self.injector.attacks.get("rot"):
+                self.injector.record_label(
+                    plant,
+                    127251,
+                    35,
+                    technique="T1692.002",
+                    attack_id="rot-spoof",
+                    scenario_id="underway",
+                    copies=n,
+                )
+        rpm_port = self.injector.spoof_rpm(plant, "port")
+        rpm_stbd = self.injector.spoof_rpm(plant, "stbd")
         if self._on(0):
-            self._emit(frames, encode_rpm(plant.t, "propulsion", 0, plant.rpm_port))
+            self._emit(frames, encode_rpm(plant.t, "propulsion", 0, rpm_port))
+            if self.injector.attacks.get("rpm"):
+                self.injector.record_label(
+                    plant,
+                    127488,
+                    0,
+                    technique="T1692.002",
+                    attack_id="rpm-spoof",
+                    scenario_id="underway",
+                    segment="propulsion",
+                    copies=n,
+                )
         if self._on(1):
-            self._emit(frames, encode_rpm(plant.t, "propulsion", 1, plant.rpm_stbd))
-        if self._on(24):
-            self._emit(frames, encode_position(plant.t, "nav", 24, plant.lat_deg, plant.lon_deg))
+            self._emit(frames, encode_rpm(plant.t, "propulsion", 1, rpm_stbd))
+        ais_on = self._on(24) or self.injector.attacks.get("ais")
+        if ais_on:
+            alat, alon = self.injector.spoof_ais(plant)
+            self._emit(frames, encode_ais_position(plant.t, "nav", 24, alat, alon))
+            if self.injector.attacks.get("ais"):
+                self.injector.record_label(
+                    plant,
+                    129038,
+                    24,
+                    technique="T1692.002",
+                    attack_id="ais-spoof",
+                    scenario_id="underway",
+                    copies=n,
+                )
         if self._on(56):
             self._emit(frames, encode_heading(plant.t, "nav", 56, plant.heading_deg))
         if self._on(52):
             self._emit(frames, encode_heading(plant.t, "nav", 52, plant.heading_deg))
         if self._on(12):
             self._emit(frames, encode_rpm(plant.t, "propulsion", 12, 900.0))
-        if self._on(20):
-            self._emit(frames, encode_rpm(plant.t, "power", 20, 1800.0))
+        if self._on(20) or self.injector.attacks.get("battery"):
+            self._emit(frames, encode_battery(plant.t, "power", 20, self.injector.spoof_battery()))
+            if self.injector.attacks.get("battery"):
+                self.injector.record_label(
+                    plant,
+                    127508,
+                    20,
+                    technique="T1692.002",
+                    attack_id="battery-spoof",
+                    scenario_id="underway",
+                    segment="power",
+                    copies=n,
+                )
+        if self.injector.attacks.get("depth"):
+            self._emit(frames, encode_depth(plant.t, "nav", 16 if self._on(16) else ROGUE_SA, self.injector.spoof_depth(plant)))
+            self.injector.record_label(
+                plant,
+                128267,
+                16 if self._on(16) else ROGUE_SA,
+                technique="T1692.002",
+                attack_id="depth-spoof",
+                scenario_id="underway",
+                copies=n,
+            )
 
         attacks = self.injector.attacks
         if attacks.get("pgn_flood") and self._on(35):
-            for _ in range(FLOOD_N):
-                self._emit(frames, encode_heading(plant.t, "nav", 35, heading))
+            self._burst(frames, lambda: encode_heading(plant.t, "nav", 35, heading))
+            self.injector.record_label(
+                plant, 127250, 35, technique="T0814", attack_id="pgn-flood", scenario_id="underway", copies=n
+            )
+        if attacks.get("error_flood"):
+            self._burst(frames, lambda: encode_error_frame(plant.t, "nav", ROGUE_SA, 127250))
+            self.injector.record_label(
+                plant, 127250, ROGUE_SA, technique="T0814", attack_id="error-flood", scenario_id="underway", copies=n
+            )
+        if attacks.get("fast_packet"):
+            self._burst(
+                frames,
+                lambda: encode_sats(plant.t, "nav", ROGUE_SA, plant.sat_count, plant.lat_deg, plant.lon_deg),
+            )
+            self.injector.record_label(
+                plant, 129029, ROGUE_SA, technique="T0814", attack_id="fast-packet", scenario_id="underway", copies=n
+            )
         if attacks.get("read") or attacks.get("read_flood"):
-            n = FLOOD_N if attacks.get("read_flood") else 1
-            for _ in range(n):
+            count = n if attacks.get("read_flood") else 1
+            for _ in range(count):
                 self._emit(frames, encode_iso_request(plant.t, "nav", ROGUE_SA, 16, 129025))
                 self._emit(frames, encode_iso_request(plant.t, "propulsion", ROGUE_SA, 0, 127488))
                 self._emit(frames, encode_iso_request(plant.t, "propulsion", ROGUE_SA, 1, 127488))
+            self.injector.record_label(
+                plant,
+                59904,
+                ROGUE_SA,
+                technique="T0814" if attacks.get("read_flood") else "T0801",
+                attack_id="read-flood" if attacks.get("read_flood") else "read",
+                scenario_id="underway",
+                copies=n if attacks.get("read_flood") else 1,
+            )
         if attacks.get("write") or attacks.get("write_flood"):
-            n = FLOOD_N if attacks.get("write_flood") else 1
-            for _ in range(n):
+            count = n if attacks.get("write_flood") else 1
+            for _ in range(count):
                 self._emit(frames, encode_heading_control(plant.t, "nav", ROGUE_SA, plant.heading_deg))
+            self.injector.record_label(
+                plant,
+                127237,
+                ROGUE_SA,
+                technique="T0814" if attacks.get("write_flood") else "T1692.001",
+                attack_id="write-flood" if attacks.get("write_flood") else "write",
+                scenario_id="underway",
+                copies=n if attacks.get("write_flood") else 1,
+            )
+        if attacks.get("engine_cmd"):
+            self._burst(frames, lambda: encode_engine_control(plant.t, "propulsion", ROGUE_SA, 0, 1800.0))
+            self.injector.record_label(
+                plant,
+                126208,
+                ROGUE_SA,
+                technique="T1692.001",
+                attack_id="engine-cmd",
+                scenario_id="underway",
+                segment="propulsion",
+                copies=n,
+            )
+        if attacks.get("rogue_master"):
+            self._burst(frames, lambda: encode_claim(plant.t, "nav", 16, "ROGUE16"))
+            self._burst(frames, lambda: encode_claim(plant.t, "nav", ROGUE_SA, "ROGUE"))
+            self.injector.record_label(
+                plant, 60928, 16, technique="T0848", attack_id="rogue-master", scenario_id="underway", copies=n
+            )
+        if attacks.get("gateway_bypass") and self._on(0):
+            self._burst(frames, lambda: encode_rpm(plant.t, "nav", 0, rpm_port))
+            self.injector.record_label(
+                plant,
+                127488,
+                0,
+                technique="T1692",
+                attack_id="gateway-bypass",
+                scenario_id="underway",
+                segment="nav",
+                copies=n,
+            )
         return frames

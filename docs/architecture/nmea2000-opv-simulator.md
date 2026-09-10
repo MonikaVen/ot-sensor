@@ -149,13 +149,19 @@ Injections change CAN contents only. Ground-truth tags go on the **label stream*
 | Attack | Segment | ATT&CK | Mechanism |
 | --- | --- | --- | --- |
 | GPS spoof (`gps-spoof-underway`) | nav | T1692.002 | Phased false 129025 / 129026 / 129029 while DOPs stay healthy; see [GPS spoofing scenario](#gps-spoofing-scenario) |
+| Dual GNSS spoof (`gps-spoof-both`) | nav | T1692.002 | GNSS-1 and GNSS-2 both follow the lie |
 | AIS spoof | nav | T1692.002 | False 129038 / static PGNs |
-| Heading spoof | nav | T1692.002 | False 127250 / 127251 |
-| Unauthorized autopilot command | nav | T1692.001 | 127237 (or equivalent) from non-autopilot SA |
-| Unauthorized engine command | propulsion | T1692.001 | Control PGN toward engine/thruster |
-| Rogue Master | any | T0848 | Address claim / NAME spoof, SA theft |
-| PGN flood | any | T0814 | High-rate flood; sample ONNX `throughput-lstm` is trained to fire on this pattern |
-| Gateway bypass | cross-segment | T1692 + isolation failure | Engine or command PGN on nav; nav-only PGN forced onto propulsion outside allowlist |
+| Heading spoof | nav | T1692.002 | False 127250 |
+| Rate-of-turn spoof | nav | T1692.002 | False 127251 |
+| Velocity spoof | nav | T1692.002 | False 129026 SOG |
+| RPM / depth / battery spoof | prop / nav / power | T1692.002 | False 127488 / 128267 / 127508 |
+| Unauthorized autopilot command | nav | T1692.001 / T0855 | 127237 from rogue SA 44 |
+| Unauthorized engine command | propulsion | T1692.001 | 126208 toward engine/thruster |
+| Rogue Master | any | T0848 | Address claim / NAME spoof, SA theft (`gps-spoof-sa-collision`) |
+| PGN flood | any | T0814 | High-rate heading burst |
+| Error-frame flood | any | T0814 | CAN error frames |
+| Fast Packet exhaustion | nav | T0814 | High-rate 129029 first frames |
+| Gateway bypass | cross-segment | T1692 | Engine RPM forced onto nav |
 
 Off-bus RF GNSS spoofing is **not** simulated at RF. `gps-spoof-underway` reproduces the **on-bus consequence** (unauthorized reporting PGNs) so the sensor’s N2K path is exercised. Scenario `GNSS-degraded` remains the benign counterpart: poor quality, position still on the DR track.
 

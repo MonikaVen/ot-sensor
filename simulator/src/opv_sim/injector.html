@@ -112,7 +112,7 @@
       #log .hex { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 10px; }
       .row-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
       footer.bottom {
-        display: grid; grid-template-columns: 1.1fr 1fr; gap: 0;
+        display: grid; grid-template-columns: 1.7fr 0.8fr; gap: 0;
         border-top: 1px solid var(--stroke); background: var(--panel); flex-shrink: 0;
       }
       .box { padding: 12px 16px 16px; }
@@ -125,6 +125,13 @@
       .switch input { accent-color: var(--ok); width: 16px; height: 16px; }
       .switch.attack input { accent-color: var(--bad); }
       .switch small { color: var(--muted); font-size: 10px; }
+      .freq {
+        display: flex; align-items: center; gap: 12px; margin: 0 0 10px;
+        font-size: 12px; color: var(--muted);
+      }
+      .freq label { display: flex; align-items: center; gap: 8px; min-width: 150px; }
+      .freq output { color: var(--bad); font-variant-numeric: tabular-nums; font-weight: 600; }
+      .freq input[type="range"] { flex: 1; accent-color: var(--bad); height: 4px; }
       @keyframes flash {
         0% { background: #1c3a28; border-color: var(--ok); box-shadow: 0 0 14px #3caf7a88; }
         100% { background: var(--bg); border-color: var(--stroke); box-shadow: none; }
@@ -210,15 +217,30 @@
     <footer class="bottom">
       <section class="box" id="attacks">
         <h2>Attacks</h2>
+        <div class="freq">
+          <label for="hz">Frequency <output id="hz-out">16</output> Hz</label>
+          <input type="range" id="hz" min="1" max="32" step="1" value="16" />
+        </div>
         <div class="toggles">
-          <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002 · 129025</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="spoof_both" /> GNSS-1+2 spoof <small>T1692.002 · gps-spoof-both</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="ais" /> AIS spoof <small>T1692.002 · 129038</small></label>
           <label class="switch attack"><input type="checkbox" data-attack="gyro" /> Gyro spoof <small>T1692.002 · 127250</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="rot" /> ROT spoof <small>T1692.002 · 127251</small></label>
           <label class="switch attack"><input type="checkbox" data-attack="velocity" /> Velocity spoof <small>T1692.002 · 129026 SOG</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="read" /> Read <small>ISO Request 59904</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="write" /> Write <small>heading control 127237</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="read_flood" /> Read flood <small>ISO Request burst</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="write_flood" /> Write flood <small>127237 burst</small></label>
-          <label class="switch attack"><input type="checkbox" data-attack="pgn_flood" /> PGN flood <small>heading burst</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="rpm" /> RPM spoof <small>T1692.002 · 127488</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="depth" /> Depth spoof <small>T1692.002 · 128267</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="battery" /> Battery spoof <small>T1692.002 · 127508</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="read" /> Read <small>T0801 · ISO Request 59904</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="write" /> Write <small>T1692.001 · T0855 · 127237</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="engine_cmd" /> Engine command <small>T1692.001 · 126208</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="read_flood" /> Read flood <small>T0814 · ISO Request burst</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="write_flood" /> Write flood <small>T0814 · 127237 burst</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="pgn_flood" /> PGN flood <small>T0814 · heading burst</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="error_flood" /> Error flood <small>T0814 · error frames</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="fast_packet" /> Fast Packet flood <small>T0814 · 129029</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="rogue_master" /> Rogue Master <small>T0848 · SA 16 theft</small></label>
+          <label class="switch attack"><input type="checkbox" data-attack="gateway_bypass" /> Gateway bypass <small>T1692 · RPM on nav</small></label>
         </div>
       </section>
       <section class="box" id="devices">
@@ -416,6 +438,12 @@
           if (document.activeElement === el) return;
           el.checked = !!attacks[el.getAttribute("data-attack")];
         });
+        const hz = document.getElementById("hz");
+        const hzOut = document.getElementById("hz-out");
+        if (hz && document.activeElement !== hz && s.frequency != null) {
+          hz.value = String(s.frequency);
+          if (hzOut) hzOut.value = String(s.frequency);
+        }
         const devices = s.devices || {};
         document.querySelectorAll("[data-device]").forEach((el) => {
           if (document.activeElement === el) return;
@@ -424,9 +452,19 @@
         document.querySelectorAll(".node[data-sa]").forEach((n) => {
           const sa = n.getAttribute("data-sa");
           if (sa === "44") {
-            const on = Object.entries(attacks).some(([k, v]) => v && k !== "spoof" && k !== "gyro" && k !== "velocity");
+            const on = Object.entries(attacks).some(([k, v]) => v && !["spoof", "spoof_both", "gyro", "rot", "velocity", "rpm", "depth", "battery", "ais"].includes(k));
             n.classList.toggle("silent", !on);
             n.classList.toggle("off", !on);
+            return;
+          }
+          if (sa === "24" && attacks.ais) {
+            n.classList.toggle("silent", false);
+            n.classList.toggle("off", false);
+            return;
+          }
+          if (sa === "20" && attacks.battery) {
+            n.classList.toggle("silent", false);
+            n.classList.toggle("off", false);
             return;
           }
           const on = devices[sa] !== false && devices[sa] !== undefined ? devices[sa] : !n.classList.contains("silent");
@@ -465,14 +503,23 @@
           seg.classList.add("pulse");
         }
       }
-      const ATTACK_TAG = { spoof: " · SPOOF", spoofed: " · SPOOF", gyro: " · GYRO", velocity: " · SOG", read: " · READ", write: " · WRITE", flood: " · FLOOD" };
+      const ATTACK_TAG = {
+        spoof: "SPOOF", spoofed: "SPOOF", ais: "AIS", gyro: "GYRO", rot: "ROT",
+        velocity: "SOG", rpm: "RPM", depth: "DEPTH", battery: "BATT",
+        read: "READ", write: "WRITE", engine: "ENG", flood: "FLOOD",
+        error: "ERR", rogue: "T0848", bypass: "BYPASS",
+      };
       function prependLog(m) {
         const log = document.getElementById("log");
         const li = document.createElement("li");
         const kind = m.kind || (m.spoofed ? "spoof" : "ok");
         if (kind !== "ok" || m.spoofed) li.className = "attack";
         if (m.spoofed) li.classList.add("spoofed");
-        const tag = ATTACK_TAG[kind] || (m.spoofed ? " · SPOOF" : "");
+        const bits = [];
+        if (ATTACK_TAG[kind]) bits.push(ATTACK_TAG[kind]);
+        if (m.technique) bits.push(m.technique);
+        if (m.hz) bits.push(m.hz + " Hz");
+        const tag = bits.length ? " · " + bits.join(" · ") : "";
         li.innerHTML = `<div class="meta">${esc(m.segment)} · SA ${esc(m.sa)} ${esc(m.name)}${tag}</div>
           <div><strong>PGN ${esc(m.pgn)}</strong> ${esc(m.pgn_name)}</div>
           <div>${esc(m.summary)}</div>
@@ -485,12 +532,14 @@
         lastTicks = s.ticks;
         const token = ++playId;
         const msgs = s.emissions || [];
+        const hz = Number(s.frequency) || 16;
+        const gap = Math.max(8, Math.round(400 / hz));
         msgs.forEach((m, i) => {
           setTimeout(() => {
             if (token !== playId) return;
             flash(m.sa, m.kind || (m.spoofed ? "spoof" : "ok"));
             prependLog(m);
-          }, i * 40);
+          }, i * gap);
         });
       }
       function apply(s) {
@@ -506,6 +555,12 @@
         const t = ev.target;
         if (!(t instanceof HTMLInputElement) || !t.hasAttribute("data-attack")) return;
         apply(await control("toggle_attack", { attack: t.getAttribute("data-attack"), enabled: t.checked }));
+      });
+      document.getElementById("hz").addEventListener("input", (ev) => {
+        document.getElementById("hz-out").value = ev.target.value;
+      });
+      document.getElementById("hz").addEventListener("change", async (ev) => {
+        apply(await control("frequency", { frequency: Number(ev.target.value) }));
       });
       document.getElementById("device-toggles").addEventListener("change", async (ev) => {
         const t = ev.target;

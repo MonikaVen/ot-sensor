@@ -36,7 +36,7 @@ def main() -> None:
     sim = OpvSimulator(
         sim_mode=args.mode,
         attack_id=args.attack or None,
-        scenario_id="gps-spoof-underway" if args.attack in ("gps-spoof-primary", "gps-spoof-underway") else "underway",
+        scenario_id="gps-spoof-underway" if args.attack in ("gps-spoof-primary", "gps-spoof-underway", "gps-spoof-both") else "underway",
     )
     for i in range(args.ticks):
         plant, frames = sim.tick(float(i))

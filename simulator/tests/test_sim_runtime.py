@@ -96,6 +96,14 @@ def test_sim_control_api_sets_attack():
         assert 'data-attack="spoof"' in r.text
         assert 'data-attack="gyro"' in r.text
         assert 'data-attack="velocity"' in r.text
+        assert 'data-attack="ais"' in r.text
+        assert 'data-attack="rogue_master"' in r.text
+        assert 'data-attack="engine_cmd"' in r.text
+        assert 'data-attack="gateway_bypass"' in r.text
+        assert 'data-attack="error_flood"' in r.text
+        assert 'id="hz"' in r.text
+        assert "T0848" in r.text
+        assert "T1692.001" in r.text
         assert 'id="own-globe"' in r.text
         assert "Gyro heading" in r.text
         assert "Latitude" in r.text
@@ -200,3 +208,103 @@ def test_tap_endpoint_exposes_raw_frames():
         row = body["frames"][0]
         assert "can_id" in row and "data_hex" in row and "segment" in row
         assert bytes.fromhex(row["data_hex"])
+
+
+def test_frequency_scales_flood_and_attack_log():
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    rt.set_attack("pgn_flood", True)
+    rt.set_device("35", True)
+    rt.set_frequency(4)
+    rt.tick()
+    floods = [e for e in rt.snapshot()["emissions"] if e["kind"] == "flood"]
+    assert len(floods) >= 4
+    assert all(e["hz"] == 4 and e["technique"] == "T0814" for e in floods)
+    labels = [r for r in rt.sim.labels.records if r.pgn == 127250 and r.technique == "T0814"]
+    assert len(labels) >= 4
+    assert labels[0].frequency_hz == 4
+    rt.set_frequency(12)
+    rt.tick()
+    floods = [e for e in rt.snapshot()["emissions"] if e["kind"] == "flood"]
+    assert len(floods) >= 12
+
+
+def test_frequency_repeats_spoof_in_attack_log():
+    rt = SimRuntime("dev", "gps-spoof-primary")
+    rt.set_frequency(5)
+    rt.tick()
+    pos = [e for e in rt.snapshot()["emissions"] if e["sa"] == "16" and e["pgn"] == 129025]
+    assert len(pos) == 5
+    assert pos[0]["technique"] == "T1692.002"
+    assert pos[0]["hz"] == 5
+    frames = [f for f in rt.last_frames if decode_fields(f).get("pgn") == 129025 and decode_fields(f)["sa"] == 16]
+    assert len(frames) == 1
+
+
+def test_new_mitre_overlays():
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    rt.set_frequency(3)
+
+    rt.set_attack("ais", True)
+    plant, frames = rt.tick()
+    ais = [decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 129038]
+    assert ais and abs(ais[0]["lat_deg"] - plant.lat_deg) > 1e-4
+    assert any(e["kind"] == "ais" and e["technique"] == "T1692.002" for e in rt.snapshot()["emissions"])
+    rt.set_attack("ais", False)
+
+    rt.set_attack("engine_cmd", True)
+    _p, frames = rt.tick()
+    cmds = [decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 126208]
+    assert len(cmds) == 3
+    assert all(c["sa"] == 44 and c["operation_name"] == "engine_control" for c in cmds)
+    assert any(e["kind"] == "engine" and e["technique"] == "T1692.001" for e in rt.snapshot()["emissions"])
+    rt.set_attack("engine_cmd", False)
+
+    rt.set_attack("rogue_master", True)
+    _p, frames = rt.tick()
+    claims = [decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 60928]
+    stolen = [c for c in claims if c["sa"] == 16 and str(c.get("iso_name") or "").startswith("ROGUE")]
+    assert stolen
+    assert any(e["kind"] == "rogue" and e["technique"] == "T0848" for e in rt.snapshot()["emissions"])
+    rt.set_attack("rogue_master", False)
+
+    rt.set_attack("gateway_bypass", True)
+    _p, frames = rt.tick()
+    bypass = [decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 127488 and f.segment == "nav"]
+    assert len(bypass) == 3
+    assert any(e["kind"] == "bypass" and e["technique"] == "T1692" for e in rt.snapshot()["emissions"])
+    rt.set_attack("gateway_bypass", False)
+
+    rt.set_attack("spoof_both", True)
+    plant, frames = rt.tick()
+    pos = [decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 129025]
+    g1 = next(p for p in pos if p["sa"] == 16)
+    g2 = next(p for p in pos if p["sa"] == 17)
+    assert abs(g1["lat_deg"] - plant.lat_deg) > 1e-4
+    assert abs(g2["lat_deg"] - plant.lat_deg) > 1e-4
+    rt.set_attack("spoof_both", False)
+
+    rt.set_attack("error_flood", True)
+    _p, frames = rt.tick()
+    errs = [f for f in frames if f.error]
+    assert len(errs) == 3
+    rt.set_attack("error_flood", False)
+
+    rt.set_attack("rot", True)
+    plant, frames = rt.tick()
+    rot = next(decode_fields(f) for f in frames if decode_fields(f).get("pgn") == 127251)
+    assert rot["rot_deg_s"] > plant.rot_deg_s + 4
+
+
+def test_frequency_control_api():
+    from opv_sim.app import app, runtime
+
+    runtime.reset("")
+    runtime.running = False
+    with TestClient(app) as client:
+        r = client.post("/api/control", json={"action": "frequency", "frequency": 7})
+        assert r.json()["snapshot"]["frequency"] == 7
+        r = client.post("/api/control", json={"action": "toggle_attack", "attack": "rogue_master", "enabled": True})
+        assert r.json()["snapshot"]["attacks"]["rogue_master"] is True
+        assert r.json()["snapshot"]["attack_id"] == "rogue-master"

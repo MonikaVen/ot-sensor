@@ -46,6 +46,38 @@ def encode_heading(t, segment: str, sa: int, heading_deg: float) -> CanFrame:
     return CanFrame(t, segment, pack_id(127250, sa), data[:8])
 
 
+def encode_rate_of_turn(t, segment: str, sa: int, rot_deg_s: float) -> CanFrame:
+    raw = int(round(math.radians(rot_deg_s) / 3.125e-5))
+    raw = max(-32767, min(32767, raw))
+    data = b"\x00" + struct.pack("<h", raw) + b"\xff\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(127251, sa), data[:8])
+
+
+def encode_ais_position(t, segment: str, sa: int, lat: float, lon: float) -> CanFrame:
+    data = _i32(lat, 1e-7) + _i32(lon, 1e-7)
+    return CanFrame(t, segment, pack_id(129038, sa), data)
+
+
+def encode_depth(t, segment: str, sa: int, depth_m: float) -> CanFrame:
+    data = b"\x00" + _u16(depth_m, 0.01) + b"\xff\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(128267, sa), data[:8])
+
+
+def encode_battery(t, segment: str, sa: int, volts: float) -> CanFrame:
+    data = b"\x00" + _u16(volts, 0.01) + b"\xff\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(127508, sa), data[:8])
+
+
+def encode_engine_control(t, segment: str, sa: int, da: int, rpm: float) -> CanFrame:
+    data = b"\x01" + _u16(rpm, 0.25) + bytes([da & 0xFF]) + b"\xff\xff\xff"
+    return CanFrame(t, segment, pack_id(126208, sa, da=da), data[:8])
+
+
+def encode_error_frame(t, segment: str, sa: int, pgn: int = 127250) -> CanFrame:
+    data = b"\x00\x00\x00\x00\x00\x00\x00\x00"
+    return CanFrame(t, segment, pack_id(pgn, sa), data, error=True)
+
+
 def encode_rpm(t, segment: str, sa: int, rpm: float) -> CanFrame:
     data = b"\x00" + _u16(rpm, 0.25) + b"\xff\xff\xff\xff"
     return CanFrame(t, segment, pack_id(127488, sa), data[:8])
@@ -72,7 +104,7 @@ def encode_heading_control(t, segment: str, sa: int, heading_deg: float) -> CanF
 def decode_fields(frame: CanFrame) -> dict:
     ids = unpack_id(frame.can_id)
     pgn, data = ids["pgn"], frame.data
-    out = {**ids, "segment": frame.segment}
+    out = {**ids, "segment": frame.segment, "error": bool(frame.error)}
     if pgn == 129025 and len(data) >= 8:
         lat, lon = struct.unpack("<ii", data[:8])
         out.update(lat_deg=lat * 1e-7, lon_deg=lon * 1e-7, operation_name="gnss_position")
@@ -90,6 +122,21 @@ def decode_fields(frame: CanFrame) -> dict:
     elif pgn == 127250 and len(data) >= 3:
         hdg = struct.unpack("<H", data[1:3])[0] * 1e-4
         out.update(heading_deg=math.degrees(hdg), operation_name="heading")
+    elif pgn == 127251 and len(data) >= 3:
+        rot = struct.unpack("<h", data[1:3])[0] * 3.125e-5
+        out.update(rot_deg_s=math.degrees(rot), operation_name="rate_of_turn")
+    elif pgn == 129038 and len(data) >= 8:
+        lat, lon = struct.unpack("<ii", data[:8])
+        out.update(lat_deg=lat * 1e-7, lon_deg=lon * 1e-7, operation_name="ais_position")
+    elif pgn == 128267 and len(data) >= 3:
+        depth = struct.unpack("<H", data[1:3])[0] * 0.01
+        out.update(depth_m=depth, operation_name="water_depth")
+    elif pgn == 127508 and len(data) >= 3:
+        volts = struct.unpack("<H", data[1:3])[0] * 0.01
+        out.update(volts=volts, operation_name="battery_status")
+    elif pgn == 126208 and len(data) >= 4:
+        rpm = struct.unpack("<H", data[1:3])[0] * 0.25
+        out.update(rpm=rpm, engine_da=data[3], operation_name="engine_control", privileged=True)
     elif pgn == 127488 and len(data) >= 3:
         rpm = struct.unpack("<H", data[1:3])[0] * 0.25
         out.update(rpm=rpm, operation_name="engine_rapid")

@@ -62,6 +62,7 @@ class ControlBody(BaseModel):
     action: str
     attack_id: str | None = Field(default=None)
     intensity: float | None = Field(default=None)
+    frequency: float | None = Field(default=None)
     attack: str | None = Field(default=None)
     device: str | None = Field(default=None)
     enabled: bool | None = Field(default=None)
@@ -98,6 +99,10 @@ def control(body: ControlBody):
         if body.intensity is None:
             return {"ok": False, "error": "intensity required"}
         runtime.set_intensity(body.intensity)
+    elif body.action == "frequency":
+        if body.frequency is None:
+            return {"ok": False, "error": "frequency required"}
+        runtime.set_frequency(body.frequency)
     elif body.action == "toggle_attack":
         if not body.attack or body.enabled is None:
             return {"ok": False, "error": "attack and enabled required"}

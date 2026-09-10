@@ -52,6 +52,7 @@ class LabelRecord:
     pgn: int
     segment: str
     phase: str
+    frequency_hz: int = 16
 
 
 @dataclass
