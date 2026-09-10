@@ -114,6 +114,30 @@ def test_honeypot_live_feed(tmp_path):
     assert hp.feed() == []
 
 
+def test_honeypot_export_csv_includes_rotated(tmp_path):
+    hp = Honeypot(tmp_path, "dev", rotate_max_bytes=180, retain_max_files=8)
+    t = datetime.now(timezone.utc)
+    plant = ScenarioEngine().state_at(0)
+    from opv_sim.twins import AttackInjector, DeviceTwins
+    from otlab.bus import InMemoryCanBus
+
+    bus = InMemoryCanBus()
+    twins = DeviceTwins(bus, AttackInjector("dev"))
+    for _ in range(12):
+        for fr in twins.publish(plant):
+            hp.write_frame(fr)
+    hp.rotate(t)
+    text = hp.export_csv()
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    assert lines[0].startswith("t,segment,iface,seq,nbytes,kind,sha256,payload_hex,can_id,error,file")
+    assert len(lines) > 2
+    assert any(".jsonl" in ln for ln in lines[1:])
+    assert any(ln.split(",")[7] for ln in lines[1:])  # payload_hex
+    hp.wipe()
+    empty = hp.export_csv().strip().splitlines()
+    assert empty == ["t,segment,iface,seq,nbytes,kind,sha256,payload_hex,can_id,error,file"]
+
+
 def test_honeypot_drop_when_all_held(tmp_path):
     hp = Honeypot(tmp_path, "dev", rotate_max_bytes=120, retain_max_files=1)
     t = datetime.now(timezone.utc)

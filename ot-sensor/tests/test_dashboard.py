@@ -156,9 +156,18 @@ def test_api_health_and_step(tmp_path):
         live = client.get("/api/honeypot").json()
         assert live["written"] == hp["written"]
         assert live["feed"]
+        csv = client.get("/api/honeypot.csv")
+        assert csv.status_code == 200
+        assert "text/csv" in csv.headers.get("content-type", "")
+        body = csv.text
+        header = body.splitlines()[0]
+        assert header == "t,segment,iface,seq,nbytes,kind,sha256,payload_hex,can_id,error,file"
+        assert len(body.splitlines()) > 2
         r = client.post("/api/control", json={"action": "clear_honeypot"})
         assert r.json()["ok"] is True
         assert r.json()["snapshot"]["honeypot"]["bytes"] == 0
+        cleared = client.get("/api/honeypot.csv").text.strip().splitlines()
+        assert cleared == ["t,segment,iface,seq,nbytes,kind,sha256,payload_hex,can_id,error,file"]
 
 
 def test_ingest_from_simulator_tap(tmp_path, monkeypatch):
@@ -236,6 +245,9 @@ def test_honeypot_snapshot_and_clear(tmp_path):
     assert hp["series"]
     assert hp["entries"]
     assert "t" in hp["entries"][-1]
+    csv = rt.honeypot_csv()
+    assert csv.splitlines()[0].startswith("t,segment,")
+    assert len(csv.splitlines()) > 2
     n_assets = len(snap["assets"])
     rt.clear_honeypot()
     cleared = rt.snapshot()["honeypot"]

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -95,6 +96,16 @@ def snapshot():
 @app.get("/api/honeypot")
 def honeypot():
     return runtime.snapshot()["honeypot"]
+
+
+@app.get("/api/honeypot.csv")
+def honeypot_csv():
+    body = runtime.honeypot_csv()
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="ot-sensor-honeypot.csv"'},
+    )
 
 
 @app.post("/api/control")

@@ -7,8 +7,10 @@ on hold, new units are dropped (`dropped++`) instead of unlinking `open-{pid}`.
 from __future__ import annotations
 
 import base64
+import csv
 import gzip
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -188,6 +190,9 @@ class HoneypotService:
             "sha256": hashlib.sha256(data).hexdigest(),
             "payload_b64": base64.b64encode(data).decode("ascii"),
         }
+        if can_id is not None:
+            rec["can_id"] = int(can_id)
+            rec["error"] = kind == "error"
         line = json.dumps(rec, separators=(",", ":")) + "\n"
         try:
             slot.fh.write(line)
@@ -278,6 +283,92 @@ class HoneypotService:
 
     def snapshot(self) -> dict:
         return {**self.usage(), "feed": self.feed()}
+
+    def export_csv(self) -> str:
+        """All collector units on disk (open JSONL and rotated .jsonl.gz), as CSV."""
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            ["t", "segment", "iface", "seq", "nbytes", "kind", "sha256", "payload_hex", "can_id", "error", "file"]
+        )
+        for row in self.iter_export_rows():
+            writer.writerow(
+                [
+                    row.get("t") or "",
+                    row.get("segment") or "",
+                    row.get("iface") or "",
+                    row.get("seq") if row.get("seq") is not None else "",
+                    row.get("nbytes") if row.get("nbytes") is not None else "",
+                    row.get("kind") or "",
+                    row.get("sha256") or "",
+                    row.get("payload_hex") or "",
+                    row.get("can_id") if row.get("can_id") is not None else "",
+                    "true" if row.get("error") else "false" if "error" in row else "",
+                    row.get("file") or "",
+                ]
+            )
+        return buf.getvalue()
+
+    def iter_export_rows(self):
+        for path in self._unit_files():
+            rel = str(path.relative_to(self.root)) if self.root in path.parents or path.parent == self.root else path.name
+            for rec in self._read_jsonl(path):
+                payload_hex = ""
+                b64 = rec.get("payload_b64")
+                if b64:
+                    try:
+                        payload_hex = base64.b64decode(b64).hex()
+                    except (ValueError, TypeError):
+                        payload_hex = ""
+                if not payload_hex and rec.get("payload_hex"):
+                    payload_hex = str(rec["payload_hex"])
+                row = {
+                    "t": rec.get("t"),
+                    "segment": rec.get("segment"),
+                    "iface": rec.get("iface"),
+                    "seq": rec.get("seq"),
+                    "nbytes": rec.get("nbytes"),
+                    "kind": rec.get("kind"),
+                    "sha256": rec.get("sha256"),
+                    "payload_hex": payload_hex,
+                    "file": rel,
+                }
+                if "can_id" in rec:
+                    row["can_id"] = rec.get("can_id")
+                if "error" in rec:
+                    row["error"] = bool(rec.get("error"))
+                elif rec.get("kind") == "error":
+                    row["error"] = True
+                yield row
+
+    def _unit_files(self) -> list[Path]:
+        if not self.root.exists():
+            return []
+        out: list[Path] = []
+        for path in sorted(p for p in self.root.rglob("*") if p.is_file()):
+            name = path.name
+            if name.startswith("_"):
+                continue
+            if name.endswith(".jsonl") or name.endswith(".jsonl.gz"):
+                out.append(path)
+        return out
+
+    def _read_jsonl(self, path: Path):
+        opener = gzip.open if path.name.endswith(".gz") else open
+        try:
+            with opener(path, "rt", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(rec, dict):
+                        yield rec
+        except OSError:
+            return
 
     def _open(self, segment: str, iface: str, t: datetime) -> _Slot:
         d = self.root / segment

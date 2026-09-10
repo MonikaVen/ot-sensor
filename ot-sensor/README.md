@@ -80,7 +80,7 @@ Open http://127.0.0.1:8443
 
 `ot-dashboard` without `--sim-url` also starts the injector on `:8444`. Prefer `--sim-url` when the simulator is already running.
 
-Tabs: Map, Rules, Models, Correlation, Honeypot, Assistant. Reset clears TAP history only.
+Tabs: Map, Rules, Models, Correlation, Honeypot, Assistant. Reset clears TAP history only. On **Honeypot**, **Export CSV** downloads collector JSONL (open + rotated files); **Delete data** wipes those logs and leaves incidents in place.
 
 ## Tests
 

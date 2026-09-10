@@ -1,4 +1,6 @@
 import { ack, askAssistant, control, fetchAssistant, fetchSnapshot, updateRule } from "./api";
+import { stampName } from "./explorer";
+import { assetMapSvg } from "./map";
 import { assetMapSvg } from "./map";
 import { linePlot, plotColors } from "./plot";
 import type { Alert, Asset, AssistantSession, FlowMessage, HoneypotFeed, Incident, ModelPack, RuleClause, RulePack, Snapshot } from "./types";
@@ -466,8 +468,11 @@ function honeypotPageHtml(snap: Snapshot): string {
   return `<div class="models-page honeypot-page">
     <div class="map-toolbar models-toolbar">
       <h2>Honeypot</h2>
-      <p class="muted">Live collector feed. Rotate/retain cap applies. Delete removes logs only — not incidents.</p>
-      <button type="button" class="btn danger" data-ctrl="clear-honeypot">Delete all data</button>
+      <p class="muted">Live collector feed. Rotate/retain cap applies. Export dumps JSONL on disk. Delete removes logs only — not incidents.</p>
+      <div class="hp-actions">
+        <button type="button" class="btn export" data-ctrl="export-honeypot">Export CSV</button>
+        <button type="button" class="btn danger" data-ctrl="clear-honeypot">Delete data</button>
+      </div>
     </div>
     <dl class="hp-stats">
       <div><dt>Dataset</dt><dd>${esc(fmtBytes(hp?.bytes))}</dd></div>
@@ -792,6 +797,24 @@ async function runControl(action: string): Promise<void> {
   }
 }
 
+async function exportHoneypotCsv(): Promise<void> {
+  try {
+    const r = await fetch("/api/honeypot.csv");
+    if (!r.ok) throw new Error(`honeypot csv ${r.status}`);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = stampName("ot-sensor-honeypot");
+    a.click();
+    URL.revokeObjectURL(url);
+    state.error = null;
+  } catch (e) {
+    state.error = e instanceof Error ? e.message : "honeypot export failed";
+    render();
+  }
+}
+
 function eventEl(ev: Event): Element | null {
   const n = ev.target;
   if (n instanceof Element) return n;
@@ -827,8 +850,12 @@ function bind(): void {
       void runControl("reset");
       return;
     }
+    if (ctrl === "export-honeypot") {
+      void exportHoneypotCsv();
+      return;
+    }
     if (ctrl === "clear-honeypot") {
-      if (!window.confirm("Delete all honeypot logs?")) return;
+      if (!window.confirm("Delete all honeypot logs on disk? Incidents and TAP history stay.")) return;
       void runControl("clear_honeypot");
       return;
     }

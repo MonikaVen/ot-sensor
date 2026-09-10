@@ -220,6 +220,9 @@ class LabRuntime:
         self.hp_history.clear()
         return self.snapshot()
 
+    def honeypot_csv(self) -> str:
+        return self.sensor.honeypot.export_csv()
+
     def _attacks(self) -> dict:
         return dict(getattr(self.sim, "attacks", None) or {})
 
