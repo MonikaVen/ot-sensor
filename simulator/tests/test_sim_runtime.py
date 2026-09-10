@@ -130,8 +130,10 @@ def test_sim_control_api_sets_attack():
         assert 'id="plot-device"' in r.text
         assert "All attacks" in r.text
         assert "All devices" in r.text
+        assert 'id="export-csv"' in r.text
         assert 'id="export-plots"' in r.text
-        assert 'id="export-logs"' in r.text
+        assert 'id="collective-svg"' in r.text
+        assert "Benign and attacks" in r.text
         assert 'id="hz-rand"' in r.text
         assert "GNSS-1 spoof" in r.text
         assert 'data-sa="40"' in r.text

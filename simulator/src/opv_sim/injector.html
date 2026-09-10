@@ -124,11 +124,13 @@
       }
       body.plots-open #plots-page { display: flex; }
       body.plots-open .workspace { display: none; }
+      #export-csv { border-color: var(--ok); color: var(--ok); }
       .plots-toolbar {
         display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end;
         margin: 0 0 14px; padding: 12px 14px;
         border: 1px solid var(--stroke); background: var(--panel);
       }
+      .plots-toolbar .hint { flex: 1 1 100%; color: var(--muted); font-size: 12px; margin: 0; }
       .plots-toolbar label {
         display: flex; flex-direction: column; gap: 4px;
         font-size: 11px; color: var(--muted);
@@ -137,23 +139,21 @@
         background: var(--bg); color: var(--text); border: 1px solid var(--stroke);
         padding: 6px 8px; font: inherit; font-size: 13px; min-width: 180px;
       }
-      .plots-toolbar .hint { color: var(--muted); font-size: 12px; margin: 0 0 2px; }
-      #plots-grid {
-        display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-        gap: 12px; align-items: start;
-      }
+      .plots-toolbar .plots-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
+      .plots-toolbar .plots-actions button.primary { border-color: var(--ok); color: var(--ok); }
       .plot-card {
         border: 1px solid var(--stroke); background: var(--panel); padding: 10px 12px 12px;
+        flex: 0 0 auto;
       }
-      .plot-card.detect { border-color: var(--bad); }
       .plot-card h3 {
         margin: 0 0 2px; font-size: 13px; font-weight: 600; letter-spacing: 0;
         text-transform: none; color: var(--text);
       }
       .plot-card .meta { color: var(--muted); font-size: 11px; margin: 0 0 8px; }
-      .plot-card svg { width: 100%; height: 96px; display: block; }
-      .plot-legend { display: flex; gap: 10px; margin: 6px 0 0; font-size: 10px; color: var(--muted); }
-      .plot-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: middle; }
+      #collective-svg { width: 100%; height: 280px; display: block; }
+      .plot-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0 0; font-size: 11px; color: var(--muted); }
+      .plot-legend i { display: inline-block; width: 10px; height: 3px; margin-right: 6px; vertical-align: middle; }
+      .plot-legend .on { color: var(--text); }
       .plots-log { margin-top: 18px; }
       .plots-log h2 { margin: 0 0 8px; }
       .plots-table-wrap { overflow: auto; max-height: min(42vh, 480px); border: 1px solid var(--stroke); }
@@ -247,11 +247,12 @@
         <button type="button" class="primary" id="run">Start</button>
         <button type="button" id="page-injector" class="active">Injector</button>
         <button type="button" id="page-plots">Plots</button>
+        <button type="button" id="export-csv">Export CSV</button>
       </div>
     </header>
     <section id="plots-page" aria-label="Plots">
       <div class="plots-toolbar">
-        <p class="hint">Filter histograms and the log by named overlay and talker, then export CSV.</p>
+        <p class="hint">Live collective plot: benign plus each named attack. Filter by overlay and talker, then export CSV.</p>
         <label for="plot-attack">Attack
           <select id="plot-attack">
             <option value="all">All attacks</option>
@@ -262,10 +263,17 @@
             <option value="all">All devices</option>
           </select>
         </label>
-        <button type="button" id="export-plots">Export plots CSV</button>
-        <button type="button" id="export-logs">Export logs CSV</button>
+        <div class="plots-actions">
+          <span class="hint" id="plot-live">paused</span>
+          <button type="button" class="primary" id="export-plots">Export CSV</button>
+        </div>
       </div>
-      <div id="plots-grid"></div>
+      <article class="plot-card" id="collective-card">
+        <h3>Benign and attacks</h3>
+        <p class="meta" id="plot-meta">Waiting for plant ticks…</p>
+        <div id="collective-svg"></div>
+        <p class="plot-legend" id="plot-legend"></p>
+      </article>
       <section class="plots-log">
         <h2>Filtered frames</h2>
         <p class="hint" id="plots-log-count"></p>
@@ -599,15 +607,21 @@
         const device = document.getElementById("plot-device");
         return { attack: attack ? attack.value : "all", device: device ? device.value : "all" };
       }
-      function nums(series, device) {
-        return (series || [])
-          .filter((x) => {
-            if (device === "all") return true;
-            const sa = x && typeof x === "object" ? String(x.sa || "") : "";
-            return !sa || sa === device;
-          })
-          .map((x) => (typeof x === "number" ? x : Number(x && x.v)))
-          .filter(Number.isFinite);
+      const ATTACK_COLORS = ["#d45b4c", "#c9a227", "#3d8bfd", "#9b7ed9", "#e07a70", "#5ec8d8", "#d4a017", "#8b97a8", "#f08c6e", "#6aa4ff"];
+      function sampleMatchesDevice(item, device) {
+        if (device === "all") return true;
+        const sa = item && typeof item === "object" ? String(item.sa || "") : "";
+        return !sa || sa === device;
+      }
+      function countByTime(series, device) {
+        const map = new Map();
+        for (const item of series || []) {
+          if (!sampleMatchesDevice(item, device)) continue;
+          const t = item && typeof item === "object" && item.t ? item.t : "";
+          if (!t) continue;
+          map.set(t, (map.get(t) || 0) + 1);
+        }
+        return map;
       }
       function csvEscape(v) {
         const s = v == null ? "" : String(v);
@@ -628,12 +642,72 @@
         const p = (n) => String(n).padStart(2, "0");
         return `${prefix}-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
       }
-      function filteredHist(s) {
+      function collectiveData(s) {
         const { attack, device } = plotFilter();
-        return (s.histograms || [])
-          .filter((h) => attack === "all" || h.key === attack)
-          .map((h) => ({ ...h, benign: nums(h.benign, device), attack: nums(h.attack, device) }))
-          .filter((h) => device === "all" || attack !== "all" || h.benign.length || h.attack.length);
+        const overlays = (s.histograms || []).filter((h) => attack === "all" || h.key === attack);
+        const benignMap = new Map();
+        for (const h of overlays) {
+          for (const [t, n] of countByTime(h.benign, device)) {
+            benignMap.set(t, (benignMap.get(t) || 0) + n);
+          }
+        }
+        const attacks = overlays.map((h, i) => ({
+          key: h.key,
+          label: h.label,
+          active: !!h.active,
+          color: ATTACK_COLORS[i % ATTACK_COLORS.length],
+          byT: countByTime(h.attack, device),
+        })).filter((a) => attack !== "all" || a.active || [...a.byT.values()].some((n) => n > 0));
+        const times = [...new Set([...benignMap.keys(), ...attacks.flatMap((a) => [...a.byT.keys()])])]
+          .filter(Boolean)
+          .sort();
+        return {
+          times,
+          series: [
+            { key: "benign", label: "benign", color: "#3caf7a", values: times.map((t) => benignMap.get(t) || 0) },
+            ...attacks.map((a) => ({ key: a.key, label: a.label, color: a.color, active: a.active, values: times.map((t) => a.byT.get(t) || 0) })),
+          ],
+        };
+      }
+      function linePlotSvg(times, series) {
+        const w = 920, h = 280, padL = 44, padR = 14, padT = 14, padB = 30;
+        const usable = series.filter((ln) => ln.values.some((v) => Number.isFinite(v)));
+        if (!times.length || !usable.length) {
+          return `<svg viewBox="0 0 ${w} ${h}" role="img"><text x="${w / 2}" y="${h / 2}" text-anchor="middle" fill="#8b97a8" font-size="13">waiting for samples</text></svg>`;
+        }
+        let ymax = 0;
+        for (const ln of usable) for (const v of ln.values) if (Number.isFinite(v)) ymax = Math.max(ymax, v);
+        if (ymax < 1) ymax = 1;
+        ymax *= 1.12;
+        const innerW = w - padL - padR;
+        const innerH = h - padT - padB;
+        const xAt = (i) => padL + (times.length === 1 ? innerW / 2 : (i / (times.length - 1)) * innerW);
+        const yAt = (v) => padT + (1 - v / ymax) * innerH;
+        const paths = usable.map((ln) => {
+          let d = "";
+          ln.values.forEach((v, i) => {
+            if (!Number.isFinite(v)) return;
+            d += `${d ? " L" : "M"}${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`;
+          });
+          const width = ln.key === "benign" ? 2.2 : 1.8;
+          return `<path d="${d}" fill="none" stroke="${ln.color}" stroke-width="${width}" />`;
+        }).join("");
+        const ticks = [0, ymax / 2, ymax];
+        const fmt = (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1));
+        const yLabels = ticks.map((v) =>
+          `<text x="${padL - 6}" y="${yAt(v) + 3}" text-anchor="end" fill="#8b97a8" font-size="10">${fmt(v)}</text>`
+        ).join("");
+        const t0 = (times[0] || "").replace("T", " ").slice(11, 19);
+        const t1 = (times[times.length - 1] || "").replace("T", " ").slice(11, 19);
+        return `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Collective live plot">
+          <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="#2a3340" />
+          <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="#2a3340" />
+          <line x1="${padL}" y1="${yAt(0)}" x2="${w - padR}" y2="${yAt(0)}" stroke="#2a3340" stroke-dasharray="2 4" />
+          ${yLabels}
+          ${paths}
+          <text x="${padL}" y="${h - 8}" fill="#8b97a8" font-size="10">${esc(t0)}</text>
+          <text x="${w - padR}" y="${h - 8}" text-anchor="end" fill="#8b97a8" font-size="10">${esc(t1)}</text>
+        </svg>`;
       }
       function logMatches(row, attack, device) {
         if (device !== "all" && String(row.sa) !== device) return false;
@@ -645,45 +719,6 @@
       function filteredLogs(s) {
         const { attack, device } = plotFilter();
         return (s.log_archive || []).filter((row) => logMatches(row, attack, device));
-      }
-      function histSvg(benign, attack) {
-        const w = 320, h = 88, padL = 28, padR = 8, padT = 8, padB = 16, nBins = 10;
-        const vals = [...benign, ...attack];
-        if (!vals.length) {
-          return `<svg viewBox="0 0 ${w} ${h}" role="img"><text x="${w / 2}" y="${h / 2}" text-anchor="middle" fill="#8b97a8" font-size="11">waiting for samples</text></svg>`;
-        }
-        let lo = Math.min(...vals), hi = Math.max(...vals);
-        if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
-        const span = hi - lo;
-        const binsB = Array(nBins).fill(0);
-        const binsA = Array(nBins).fill(0);
-        const place = (arr, bins) => {
-          for (const v of arr) bins[Math.min(nBins - 1, Math.floor(((v - lo) / span) * nBins))]++;
-        };
-        place(benign, binsB);
-        place(attack, binsA);
-        const peak = Math.max(1, ...binsB, ...binsA);
-        const innerW = w - padL - padR;
-        const innerH = h - padT - padB;
-        const slot = innerW / nBins;
-        const barW = Math.max(2, (slot - 2) / 2);
-        const yAt = (c) => padT + innerH - (c / peak) * innerH;
-        const bars = [];
-        for (let i = 0; i < nBins; i++) {
-          const x = padL + i * slot;
-          const hb = Math.max(0, innerH - (yAt(binsB[i]) - padT));
-          const ha = Math.max(0, innerH - (yAt(binsA[i]) - padT));
-          bars.push(`<rect x="${x.toFixed(1)}" y="${yAt(binsB[i]).toFixed(1)}" width="${barW}" height="${hb.toFixed(1)}" fill="#3caf7a"/>`);
-          bars.push(`<rect x="${(x + barW + 1).toFixed(1)}" y="${yAt(binsA[i]).toFixed(1)}" width="${barW}" height="${ha.toFixed(1)}" fill="#d45b4c"/>`);
-        }
-        const fmt = (v) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2));
-        return `<svg viewBox="0 0 ${w} ${h}" role="img">
-          <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="#2a3340" />
-          <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="#2a3340" />
-          ${bars.join("")}
-          <text x="${padL}" y="${h - 3}" fill="#8b97a8" font-size="9">${fmt(lo)}</text>
-          <text x="${w - padR}" y="${h - 3}" text-anchor="end" fill="#8b97a8" font-size="9">${fmt(hi)}</text>
-        </svg>`;
       }
       function renderPlotLogs(s) {
         const body = document.getElementById("plots-log-body");
@@ -716,39 +751,31 @@
       }
       function renderPlots(s) {
         ensurePlotFilters(s);
-        const grid = document.getElementById("plots-grid");
-        if (!grid) return;
-        const rows = filteredHist(s);
-        if (!rows.length) {
-          grid.innerHTML = `<p class="meta">No plot for that attack yet. Start the plant and toggle an overlay.</p>`;
-        } else {
-          grid.innerHTML = rows.map((h) => {
-            return `<article class="plot-card ${h.active ? "detect" : ""}">
-              <h3>${esc(h.label)}</h3>
-              <p class="meta">${esc(h.technique || "")} · ${esc(h.unit || "")} · benign n=${h.benign.length} · attack n=${h.attack.length}${h.active ? " · live" : ""}</p>
-              ${histSvg(h.benign, h.attack)}
-              <p class="plot-legend"><span><i style="background:#3caf7a"></i>benign</span><span><i style="background:#d45b4c"></i>attack</span></p>
-            </article>`;
-          }).join("");
+        const data = collectiveData(s);
+        const svg = document.getElementById("collective-svg");
+        const legend = document.getElementById("plot-legend");
+        const meta = document.getElementById("plot-meta");
+        const live = document.getElementById("plot-live");
+        if (svg) svg.innerHTML = linePlotSvg(data.times, data.series);
+        if (legend) {
+          legend.innerHTML = data.series.map((ln) =>
+            `<span class="${ln.active || ln.key === "benign" ? "on" : ""}"><i style="background:${ln.color}"></i>${esc(ln.label)}</span>`
+          ).join("");
         }
+        if (meta) {
+          const n = data.times.length;
+          meta.textContent = n
+            ? `samples/tick · ${n} tick${n === 1 ? "" : "s"} · ${data.series.length} series`
+            : "Waiting for plant ticks…";
+        }
+        if (live) live.textContent = `${s.running ? "live" : "paused"} · tick ${s.ticks ?? 0}`;
         renderPlotLogs(s);
       }
       function plotsCsv(s) {
-        const { attack, device } = plotFilter();
-        const rows = [];
-        for (const h of s.histograms || []) {
-          if (attack !== "all" && h.key !== attack) continue;
-          for (const side of ["benign", "attack"]) {
-            for (const item of h[side] || []) {
-              const sa = item && typeof item === "object" ? String(item.sa || "") : "";
-              if (device !== "all" && sa && sa !== device) continue;
-              const v = typeof item === "number" ? item : Number(item && item.v);
-              if (!Number.isFinite(v)) continue;
-              rows.push([h.label, h.key, side, item && item.t || "", v, h.unit || "", h.technique || "", sa]);
-            }
-          }
-        }
-        return toCsv(["overlay", "key", "source", "t", "value", "unit", "technique", "sa"], rows);
+        const data = collectiveData(s);
+        const headers = ["t", ...data.series.map((ln) => ln.label)];
+        const rows = data.times.map((t, i) => [t, ...data.series.map((ln) => ln.values[i])]);
+        return toCsv(headers, rows);
       }
       function logsCsv(s) {
         const rows = filteredLogs(s).map((m) => [
@@ -896,10 +923,18 @@
       function apply(s) {
         lastSnap = s;
         renderStats(s);
-        renderMotion(s);
-        playEmissions(s);
-        if (document.body.classList.contains("plots-open")) renderPlots(s);
-        else ensurePlotFilters(s);
+        const plotsOpen = document.body.classList.contains("plots-open");
+        if (plotsOpen) {
+          renderPlots(s);
+          if (s.ticks !== lastTicks) {
+            lastTicks = s.ticks;
+            (s.emissions || []).forEach(prependLog);
+          }
+        } else {
+          renderMotion(s);
+          playEmissions(s);
+          ensurePlotFilters(s);
+        }
       }
       document.getElementById("run").onclick = async () => {
         const s = await snap();
@@ -923,14 +958,14 @@
       document.getElementById("page-injector").onclick = () => setPage("injector");
       document.getElementById("plot-attack").addEventListener("change", () => { if (lastSnap) renderPlots(lastSnap); });
       document.getElementById("plot-device").addEventListener("change", () => { if (lastSnap) renderPlots(lastSnap); });
-      document.getElementById("export-plots").onclick = () => {
+      function exportCsv() {
         if (!lastSnap) return;
+        if (!document.body.classList.contains("plots-open")) setPage("plots");
         downloadCsv(stamp("opv-sim-plots"), plotsCsv(lastSnap));
-      };
-      document.getElementById("export-logs").onclick = () => {
-        if (!lastSnap) return;
-        downloadCsv(stamp("opv-sim-logs"), logsCsv(lastSnap));
-      };
+        window.setTimeout(() => downloadCsv(stamp("opv-sim-logs"), logsCsv(lastSnap)), 120);
+      }
+      document.getElementById("export-csv").onclick = exportCsv;
+      document.getElementById("export-plots").onclick = exportCsv;
       document.getElementById("sog").addEventListener("input", (ev) => {
         document.getElementById("sog-out").value = Number(ev.target.value).toFixed(1);
       });
@@ -952,7 +987,7 @@
         try { apply(await snap()); } catch (e) { document.getElementById("note").textContent = e.message; }
       }
       pull();
-      setInterval(pull, 400);
+      setInterval(pull, 250);
     </script>
   </body>
 </html>
