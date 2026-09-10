@@ -4,7 +4,7 @@ OPV NMEA 2000 simulator. Lab only. It never opens a physical ship CAN interface.
 
 Package: `simulator/` in the uv workspace (`opv-sim` + `otlab` codecs). Spec: [docs/architecture/nmea2000-opv-simulator.md](../docs/architecture/nmea2000-opv-simulator.md). Interactive canvas: [canvases/nmea2000-opv-simulator-architecture.canvas.tsx](../canvases/nmea2000-opv-simulator-architecture.canvas.tsx).
 
-The **attack injector lives here**, not on the sensor dashboard.
+The **attack injector lives here**, not on the sensor dashboard. Spoof (T1692.002) is one overlay: pick any talker in Devices to lie about that device’s reporting PGNs. Named keys (`gyro`, `ais`, `rpm`, …) remain API aliases. Velocity stays a SOG-only lie on GNSS-1 so position can stay true.
 
 ## Services
 
@@ -61,7 +61,7 @@ Open http://127.0.0.1:8444
 | --- | --- |
 | `GET /` | Injector UI (MITRE overlays + header injection Hz / randomize) |
 | `GET /api/tap` | Listen-only frames for `ot-dashboard` |
-| `POST /api/control` | `toggle_attack`, `frequency`, `frequency_random`, `reset`, `start`, `pause` |
+| `POST /api/control` | `toggle_attack`, `toggle_spoof`, `frequency`, `frequency_random`, `reset`, `start`, `pause` |
 | `GET /api/health` | `mode` + `attack_id` |
 
 Injection frequency (1–32 Hz, header slider next to SOG/Frames) sizes flood bursts and repeats spoofed talker rows in the attack log. Check **Randomize** to pick a new Hz each plant tick; the live readout follows the random rate. Moving the slider turns randomize off and locks that rate. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).

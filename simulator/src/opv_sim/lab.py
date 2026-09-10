@@ -68,6 +68,10 @@ class OpvSimulator:
                 plant.attack_id = attack_id
                 plant.phase = phase
                 return
+        if self.injector.extra_spoof_sas:
+            plant.attack_id = "device-spoof"
+            plant.phase = "inject"
+            return
         plant.attack_id = None
         plant.phase = "underway"
 

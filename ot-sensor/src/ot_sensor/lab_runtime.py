@@ -10,6 +10,7 @@ import shutil
 
 from otlab.pgn import decode_fields
 from opv_sim.runtime import SimRuntime, emission_row
+from opv_sim.twins import resolve_spoof_sas
 from ot_sensor import SENSOR_VERSION
 from ot_sensor.assistant import CyberPalAssistant
 from ot_sensor.onnx_enrich import list_onnx_models
@@ -59,7 +60,7 @@ def _row_issue(row: dict) -> str | None:
     return kind if kind and kind != "ok" else "attack"
 
 
-def _comms_tick_stats(frames, plant, attacks: dict | None) -> dict[tuple, dict]:
+def _comms_tick_stats(frames, plant, attacks: dict | None, spoof_sas: set | None = None) -> dict[tuple, dict]:
     out: dict[tuple, dict] = {}
     for fr in frames or []:
         fields = decode_fields(fr)
@@ -71,7 +72,7 @@ def _comms_tick_stats(frames, plant, attacks: dict | None) -> dict[tuple, dict]:
             continue
         slot = out.setdefault(key, {"hits": 0, "issue": None})
         slot["hits"] += 1
-        issue = _row_issue(emission_row(fr, plant, attacks))
+        issue = _row_issue(emission_row(fr, plant, attacks, spoof_sas=spoof_sas))
         if issue:
             slot["issue"] = issue
     return out
@@ -192,7 +193,7 @@ class LabRuntime:
                     self.new_incident_ids.append(case.incident_id)
         self._record_flow(frames, plant)
         self._classify_traffic(frames, plant)
-        self.edge_tick = _comms_tick_stats(frames, plant, self._attacks())
+        self.edge_tick = _comms_tick_stats(frames, plant, self._attacks(), self._spoof_sas())
         self.ticks += 1
         return self.snapshot()
 
@@ -222,12 +223,22 @@ class LabRuntime:
     def _attacks(self) -> dict:
         return dict(getattr(self.sim, "attacks", None) or {})
 
+    def _spoof_sas(self) -> set:
+        extra = getattr(self.sim, "extra_spoof_sas", None)
+        listed = getattr(self.sim, "spoof_sas", None)
+        if extra is not None:
+            return resolve_spoof_sas(self._attacks(), extra)
+        if listed:
+            return {str(s) for s in listed}
+        return resolve_spoof_sas(self._attacks())
+
     def _classify_traffic(self, frames, plant) -> None:
         talkers: set[str] = set()
         attacked: set[str] = set()
         attacks = self._attacks()
+        sas = self._spoof_sas()
         for fr in frames or []:
-            row = emission_row(fr, plant, attacks)
+            row = emission_row(fr, plant, attacks, spoof_sas=sas)
             sa = row.get("sa") or ""
             if sa:
                 talkers.add(sa)
@@ -244,8 +255,9 @@ class LabRuntime:
         if not frames:
             return
         attacks = self._attacks()
+        sas = self._spoof_sas()
         for fr in frames:
-            row = emission_row(fr, plant, attacks)
+            row = emission_row(fr, plant, attacks, spoof_sas=sas)
             is_attack = bool(row.get("spoofed") or row.get("kind") not in (None, "ok"))
             row["t"] = _iso(fr.t)
             self._log_seq += 1

@@ -122,6 +122,44 @@ ATTACK_TECHNIQUES = {
     "gateway_bypass": "T1692",
 }
 
+NAMED_SPOOF_SA = {
+    "spoof": frozenset({"16"}),
+    "spoof_both": frozenset({"16", "17"}),
+    "ais": frozenset({"24"}),
+    "gyro": frozenset({"35"}),
+    "rot": frozenset({"35"}),
+    "rpm": frozenset({"0"}),
+    "depth": frozenset({"40"}),
+    "battery": frozenset({"28"}),
+}
+
+SA_TO_NAMED_SPOOF = {
+    "16": "spoof",
+    "24": "ais",
+    "35": "gyro",
+    "40": "depth",
+    "0": "rpm",
+    "28": "battery",
+}
+
+WIND_SPOOF_KN = 8.0
+WIND_SPOOF_DEG = 90.0
+FLUID_SPOOF_PCT = 22.0
+ENV_SPOOF_C = 12.0
+RUDDER_SPOOF_DEG = 18.0
+GEAR_SPOOF_DELTA = 1
+GENSET_RPM_OFFSET = 400.0
+
+
+def resolve_spoof_sas(attacks: dict | None = None, extra: set | None = None) -> set[str]:
+    sas = {str(s) for s in (extra or set())}
+    on = attacks or {}
+    for key, group in NAMED_SPOOF_SA.items():
+        if on.get(key):
+            sas |= {str(s) for s in group}
+    return sas
+
+
 ATTACK_CATALOG = [
     ("spoof", "GNSS-1 spoof", "T1692.002", "129025"),
     ("spoof_both", "GNSS-1+2 spoof", "T1692.002", "gps-spoof-both"),
@@ -272,34 +310,45 @@ class AttackInjector:
         self.frequency = FREQ_DEFAULT
         self.frame_copies = FRAMES_DEFAULT
         self.attacks = default_attacks(False)
+        self.extra_spoof_sas: set[str] = set()
         self.labels: list[LabelRecord] = []
 
     def burst_n(self) -> int:
         return clamp_frequency(self.frequency)
 
-    def gnss_spoof_on(self) -> bool:
-        return bool((self.attacks.get("spoof") or self.attacks.get("spoof_both")) and self.intensity > 0)
+    def spoof_sas(self) -> set[str]:
+        return resolve_spoof_sas(self.attacks, self.extra_spoof_sas)
 
-    def spoof_gnss1(self, plant: PlantState) -> tuple[float, float, float]:
-        if not self.gnss_spoof_on():
-            return plant.lat_deg, plant.lon_deg, plant.cog_deg
-        offset_m = 120.0 * self.intensity
-        cog_off = 25.0 * self.intensity
+    def spoofing(self, sa: int | str) -> bool:
+        return str(sa) in self.spoof_sas()
+
+    def gnss_spoof_on(self) -> bool:
+        return bool(self.spoofing(16) and (self.intensity > 0 or self.spoofing(16)))
+
+    def lie_fix(self, plant: PlantState) -> tuple[float, float, float]:
+        mag = self.intensity if self.intensity > 0 else 1.0
+        offset_m = 120.0 * mag
+        cog_off = 25.0 * mag
         lat, lon = dest_point(plant.lat_deg, plant.lon_deg, plant.heading_deg + 90.0, offset_m)
         return lat, lon, (plant.cog_deg + cog_off) % 360.0
 
+    def spoof_gnss1(self, plant: PlantState) -> tuple[float, float, float]:
+        if not self.spoofing(16):
+            return plant.lat_deg, plant.lon_deg, plant.cog_deg
+        return self.lie_fix(plant)
+
     def spoof_ais(self, plant: PlantState) -> tuple[float, float]:
-        if not self.attacks.get("ais"):
+        if not self.spoofing(24):
             return plant.lat_deg, plant.lon_deg
         return dest_point(plant.lat_deg, plant.lon_deg, plant.heading_deg + 45.0, 80.0)
 
     def spoof_heading(self, plant: PlantState) -> float:
-        if not self.attacks.get("gyro"):
+        if not self.spoofing(35):
             return plant.heading_deg
         return (plant.heading_deg + GYRO_HEADING_OFFSET_DEG) % 360.0
 
     def spoof_rot(self, plant: PlantState) -> float:
-        if not self.attacks.get("rot"):
+        if not (self.spoofing(35) or self.attacks.get("rot")):
             return plant.rot_deg_s
         return plant.rot_deg_s + ROT_OFFSET_DEG_S
 
@@ -310,17 +359,18 @@ class AttackInjector:
 
     def spoof_rpm(self, plant: PlantState, which: str = "port") -> float:
         base = plant.rpm_port if which == "port" else plant.rpm_stbd
-        if not self.attacks.get("rpm"):
+        sa = 0 if which == "port" else 1
+        if not self.spoofing(sa):
             return base
         return base + RPM_OFFSET
 
     def spoof_depth(self, plant: PlantState) -> float:
-        if not self.attacks.get("depth"):
+        if not self.spoofing(40):
             return plant.depth_m
         return plant.depth_m + DEPTH_OFFSET_M
 
     def spoof_battery(self) -> float:
-        if not self.attacks.get("battery"):
+        if not self.spoofing(28):
             return TRUE_BATTERY_VOLTS
         return BATTERY_VOLTS
 
@@ -402,6 +452,9 @@ class DeviceTwins:
     def publish(self, plant: PlantState) -> list[CanFrame]:
         frames: list[CanFrame] = []
         n = self.injector.burst_n()
+        for sa in self.injector.spoof_sas():
+            if sa in self.enabled:
+                self.enabled[sa] = True
         for sa, seg, name, _on in DEVICE_CATALOG:
             if self._on(sa) and sa not in self.claimed:
                 self._emit(frames, encode_claim(plant.t, seg, sa, name[:8]), copies=1)
@@ -411,7 +464,8 @@ class DeviceTwins:
 
         lat1, lon1, cog1 = self.injector.spoof_gnss1(plant)
         sog1 = self.injector.spoof_sog(plant)
-        if self._on(16):
+        if self._on(16) or self.injector.spoofing(16):
+            self.enabled["16"] = True
             for enc in (
                 encode_position(plant.t, "nav", 16, lat1, lon1),
                 encode_cog_sog(plant.t, "nav", 16, cog1, sog1),
@@ -420,13 +474,13 @@ class DeviceTwins:
             ):
                 self._emit(frames, enc)
                 pgn = decode_fields(enc)["pgn"]
-                if self.injector.gnss_spoof_on():
+                if self.injector.spoofing(16):
                     self.injector.record_label(
                         plant,
                         pgn,
                         16,
                         technique="T1692.002",
-                        attack_id="gps-spoof-both" if self.injector.attacks.get("spoof_both") else "gps-spoof-primary",
+                        attack_id="gps-spoof-both" if self.injector.spoofing(17) else "gps-spoof-primary",
                         scenario_id="gps-spoof-underway",
                         copies=n,
                     )
@@ -440,13 +494,15 @@ class DeviceTwins:
                         scenario_id="underway",
                         copies=n,
                     )
-        lat2, lon2, cog2 = (lat1, lon1, cog1) if self.injector.attacks.get("spoof_both") and self.injector.intensity > 0 else (
-            plant.lat_deg,
-            plant.lon_deg,
-            plant.cog_deg,
-        )
-        sog2 = sog1 if self.injector.attacks.get("spoof_both") else plant.sog_kn
-        if self._on(17):
+        if self.injector.spoofing(17):
+            lat2, lon2, cog2 = self.injector.lie_fix(plant)
+        elif self.injector.attacks.get("spoof_both") and self.injector.intensity > 0:
+            lat2, lon2, cog2 = lat1, lon1, cog1
+        else:
+            lat2, lon2, cog2 = plant.lat_deg, plant.lon_deg, plant.cog_deg
+        sog2 = sog1 if self.injector.spoofing(17) else plant.sog_kn
+        if self._on(17) or self.injector.spoofing(17):
+            self.enabled["17"] = True
             for enc in (
                 encode_position(plant.t, "nav", 17, lat2, lon2),
                 encode_cog_sog(plant.t, "nav", 17, cog2, sog2),
@@ -454,7 +510,7 @@ class DeviceTwins:
                 encode_sats(plant.t, "nav", 17, plant.sat_count, lat2, lon2),
             ):
                 self._emit(frames, enc)
-                if self.injector.attacks.get("spoof_both") and self.injector.intensity > 0:
+                if self.injector.spoofing(17):
                     self.injector.record_label(
                         plant,
                         decode_fields(enc)["pgn"],
@@ -466,13 +522,14 @@ class DeviceTwins:
                     )
         heading = self.injector.spoof_heading(plant)
         rot = self.injector.spoof_rot(plant)
-        if self._on(35):
+        if self._on(35) or self.injector.spoofing(35):
+            self.enabled["35"] = True
             pitch = 0.4
             roll = rot * 0.35
             self._emit(frames, encode_heading(plant.t, "nav", 35, heading))
             self._emit(frames, encode_rate_of_turn(plant.t, "nav", 35, rot))
             self._emit(frames, encode_attitude(plant.t, "nav", 35, heading, pitch, roll))
-            if self.injector.attacks.get("gyro"):
+            if self.injector.spoofing(35):
                 self.injector.record_label(
                     plant,
                     127250,
@@ -482,7 +539,7 @@ class DeviceTwins:
                     scenario_id="underway",
                     copies=n,
                 )
-            if self.injector.attacks.get("rot"):
+            if self.injector.spoofing(35) or self.injector.attacks.get("rot"):
                 self.injector.record_label(
                     plant,
                     127251,
@@ -496,10 +553,11 @@ class DeviceTwins:
         rpm_stbd = self.injector.spoof_rpm(plant, "stbd")
         load = 55.0 if plant.sog_kn > 1 else 12.0
         oil_kpa = 420.0
-        if self._on(0):
+        if self._on(0) or self.injector.spoofing(0):
+            self.enabled["0"] = True
             self._emit(frames, encode_rpm(plant.t, "propulsion", 0, rpm_port))
             self._emit(frames, encode_engine_dynamic(plant.t, "propulsion", 0, plant.oil_temp_c, oil_kpa, load))
-            if self.injector.attacks.get("rpm"):
+            if self.injector.spoofing(0):
                 self.injector.record_label(
                     plant,
                     127488,
@@ -510,23 +568,42 @@ class DeviceTwins:
                     segment="propulsion",
                     copies=n,
                 )
-        if self._on(1):
+        if self._on(1) or self.injector.spoofing(1):
+            self.enabled["1"] = True
             self._emit(frames, encode_rpm(plant.t, "propulsion", 1, rpm_stbd))
             self._emit(frames, encode_engine_dynamic(plant.t, "propulsion", 1, plant.oil_temp_c, oil_kpa, load))
+            if self.injector.spoofing(1):
+                self.injector.record_label(
+                    plant,
+                    127488,
+                    1,
+                    technique="T1692.002",
+                    attack_id="rpm-spoof",
+                    scenario_id="underway",
+                    segment="propulsion",
+                    copies=n,
+                )
         gear = 1 if plant.sog_kn > 1 else 0
-        if self._on(4):
-            self._emit(frames, encode_transmission(plant.t, "propulsion", 4, gear))
-        if self._on(5):
-            self._emit(frames, encode_transmission(plant.t, "propulsion", 5, gear))
-        if self._on(8):
-            self._emit(frames, encode_fluid_level(plant.t, "propulsion", 8, 68.0, instance=0))
-        echo_on = self._on(40) or self.injector.attacks.get("depth")
+        if self._on(4) or self.injector.spoofing(4):
+            self.enabled["4"] = True
+            g = (gear + GEAR_SPOOF_DELTA) % 3 if self.injector.spoofing(4) else gear
+            self._emit(frames, encode_transmission(plant.t, "propulsion", 4, g))
+        if self._on(5) or self.injector.spoofing(5):
+            self.enabled["5"] = True
+            g = (gear + GEAR_SPOOF_DELTA) % 3 if self.injector.spoofing(5) else gear
+            self._emit(frames, encode_transmission(plant.t, "propulsion", 5, g))
+        if self._on(8) or self.injector.spoofing(8):
+            self.enabled["8"] = True
+            fuel = min(100.0, 68.0 + (FLUID_SPOOF_PCT if self.injector.spoofing(8) else 0.0))
+            self._emit(frames, encode_fluid_level(plant.t, "propulsion", 8, fuel, instance=0))
+        echo_on = self._on(40) or self.injector.spoofing(40)
         if echo_on:
+            self.enabled["40"] = True
             depth = self.injector.spoof_depth(plant)
             stw = max(0.0, plant.sog_kn * 0.96)
             self._emit(frames, encode_depth(plant.t, "nav", 40, depth))
             self._emit(frames, encode_speed_water(plant.t, "nav", 40, stw))
-            if self.injector.attacks.get("depth"):
+            if self.injector.spoofing(40):
                 self.injector.record_label(
                     plant,
                     128267,
@@ -536,14 +613,28 @@ class DeviceTwins:
                     scenario_id="underway",
                     copies=n,
                 )
-        if self._on(48):
-            self._emit(frames, encode_wind(plant.t, "nav", 48, 12.0, 40.0))
-        ais_on = self._on(24) or self.injector.attacks.get("ais")
+        if self._on(48) or self.injector.spoofing(48):
+            self.enabled["48"] = True
+            wspd = 12.0 + (WIND_SPOOF_KN if self.injector.spoofing(48) else 0.0)
+            wang = 40.0 + (WIND_SPOOF_DEG if self.injector.spoofing(48) else 0.0)
+            self._emit(frames, encode_wind(plant.t, "nav", 48, wspd, wang))
+            if self.injector.spoofing(48):
+                self.injector.record_label(
+                    plant,
+                    130306,
+                    48,
+                    technique="T1692.002",
+                    attack_id="device-spoof",
+                    scenario_id="underway",
+                    copies=n,
+                )
+        ais_on = self._on(24) or self.injector.spoofing(24)
         if ais_on:
+            self.enabled["24"] = True
             alat, alon = self.injector.spoof_ais(plant)
             self._emit(frames, encode_ais_position(plant.t, "nav", 24, alat, alon))
             self._emit(frames, encode_ais_static(plant.t, "nav", 24, "OPV-LAB1"))
-            if self.injector.attacks.get("ais"):
+            if self.injector.spoofing(24):
                 self.injector.record_label(
                     plant,
                     129038,
@@ -553,21 +644,35 @@ class DeviceTwins:
                     scenario_id="underway",
                     copies=n,
                 )
-        if self._on(56):
-            self._emit(frames, encode_heading_control(plant.t, "nav", 56, plant.heading_deg, status=True))
-        if self._on(52):
+        if self._on(56) or self.injector.spoofing(56):
+            self.enabled["56"] = True
+            ap_hdg = plant.heading_deg
+            if self.injector.spoofing(56):
+                ap_hdg = (plant.heading_deg + GYRO_HEADING_OFFSET_DEG) % 360.0
+            self._emit(frames, encode_heading_control(plant.t, "nav", 56, ap_hdg, status=True))
+        if self._on(52) or self.injector.spoofing(52):
+            self.enabled["52"] = True
             angle = max(-35.0, min(35.0, rot * 2.5))
+            if self.injector.spoofing(52):
+                angle = max(-35.0, min(35.0, angle + RUDDER_SPOOF_DEG))
             self._emit(frames, encode_rudder(plant.t, "nav", 52, angle))
-        if self._on(12):
-            self._emit(frames, encode_rpm(plant.t, "propulsion", 12, 900.0))
-        if self._on(20):
-            self._emit(frames, encode_rpm(plant.t, "power", 20, 1800.0))
-        if self._on(21):
-            self._emit(frames, encode_rpm(plant.t, "power", 21, 1800.0))
-        batt_on = self._on(28) or self.injector.attacks.get("battery")
+        if self._on(12) or self.injector.spoofing(12):
+            self.enabled["12"] = True
+            thr = 900.0 + (GENSET_RPM_OFFSET if self.injector.spoofing(12) else 0.0)
+            self._emit(frames, encode_rpm(plant.t, "propulsion", 12, thr))
+        if self._on(20) or self.injector.spoofing(20):
+            self.enabled["20"] = True
+            g1 = 1800.0 + (GENSET_RPM_OFFSET if self.injector.spoofing(20) else 0.0)
+            self._emit(frames, encode_rpm(plant.t, "power", 20, g1))
+        if self._on(21) or self.injector.spoofing(21):
+            self.enabled["21"] = True
+            g2 = 1800.0 + (GENSET_RPM_OFFSET if self.injector.spoofing(21) else 0.0)
+            self._emit(frames, encode_rpm(plant.t, "power", 21, g2))
+        batt_on = self._on(28) or self.injector.spoofing(28)
         if batt_on:
+            self.enabled["28"] = True
             self._emit(frames, encode_battery(plant.t, "power", 28, self.injector.spoof_battery()))
-            if self.injector.attacks.get("battery"):
+            if self.injector.spoofing(28):
                 self.injector.record_label(
                     plant,
                     127508,
@@ -578,21 +683,33 @@ class DeviceTwins:
                     segment="power",
                     copies=n,
                 )
-        if self._on(32):
+        if self._on(32) or self.injector.spoofing(32):
+            self.enabled["32"] = True
             bits = 0x01 if plant.breaker_closed else 0x00
+            if self.injector.spoofing(32):
+                bits ^= 0x01
             self._emit(frames, encode_binary_status(plant.t, "power", 32, bits))
-        if self._on(80):
-            self._emit(frames, encode_environment(plant.t, "aux", 80, 16.0, 78.0))
-        if self._on(84):
-            self._emit(frames, encode_fluid_level(plant.t, "aux", 84, 41.0, instance=1))
-        if self._on(88):
-            self._emit(frames, encode_binary_status(plant.t, "aux", 88, 0))
-        if self._on(60):
+        if self._on(80) or self.injector.spoofing(80):
+            self.enabled["80"] = True
+            temp = 16.0 + (ENV_SPOOF_C if self.injector.spoofing(80) else 0.0)
+            self._emit(frames, encode_environment(plant.t, "aux", 80, temp, 78.0))
+        if self._on(84) or self.injector.spoofing(84):
+            self.enabled["84"] = True
+            tank = min(100.0, 41.0 + (FLUID_SPOOF_PCT if self.injector.spoofing(84) else 0.0))
+            self._emit(frames, encode_fluid_level(plant.t, "aux", 84, tank, instance=1))
+        if self._on(88) or self.injector.spoofing(88):
+            self.enabled["88"] = True
+            bits = 0x01 if self.injector.spoofing(88) else 0
+            self._emit(frames, encode_binary_status(plant.t, "aux", 88, bits))
+        if self._on(60) or self.injector.spoofing(60):
+            self.enabled["60"] = True
             self._emit(frames, encode_system_time(plant.t, "nav", 60))
             self._emit(frames, encode_heartbeat(plant.t, "nav", 60))
-        if self._on(99):
+        if self._on(99) or self.injector.spoofing(99):
+            self.enabled["99"] = True
             self._emit(frames, encode_heartbeat(plant.t, "nav", 99, 1.0))
-            self._emit(frames, encode_binary_status(plant.t, "nav", 99, 0xA5))
+            bits = 0x5A if self.injector.spoofing(99) else 0xA5
+            self._emit(frames, encode_binary_status(plant.t, "nav", 99, bits))
 
         attacks = self.injector.attacks
         if attacks.get("pgn_flood") and self._on(35):

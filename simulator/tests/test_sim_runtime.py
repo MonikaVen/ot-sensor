@@ -107,9 +107,10 @@ def test_sim_control_api_sets_attack():
         r = client.get("/")
         assert r.status_code == 200
         assert 'data-attack="spoof"' in r.text
-        assert 'data-attack="gyro"' in r.text
+        assert 'data-spoof-sa=' in r.text
         assert 'data-attack="velocity"' in r.text
-        assert 'data-attack="ais"' in r.text
+        assert 'data-attack="gyro"' not in r.text
+        assert 'data-attack="ais"' not in r.text
         assert 'data-attack="rogue_master"' in r.text
         assert 'data-attack="engine_cmd"' in r.text
         assert 'data-attack="gateway_bypass"' in r.text
@@ -541,3 +542,57 @@ def test_every_catalog_device_emits_when_enabled():
     off = {decode_fields(f)["sa"] for f in frames}
     assert 60 not in off
     assert 99 not in off
+
+
+def test_spoof_any_device_offsets_reporting_pgn():
+    from opv_sim.twins import WIND_SPOOF_KN
+
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    rt.set_spoof_sa("48", True)
+    _plant, frames = rt.tick()
+    wind = next(
+        decode_fields(f)
+        for f in frames
+        if decode_fields(f).get("pgn") == 130306 and decode_fields(f)["sa"] == 48
+    )
+    assert wind["wind_kn"] > 12.0 + WIND_SPOOF_KN - 0.5
+    snap = rt.snapshot()
+    assert snap["spoof_sas"] == ["48"]
+    assert snap["attack_id"] == "device-spoof"
+    assert snap["devices"]["48"] is True
+    row = next(e for e in snap["emissions"] if e["sa"] == "48" and e["pgn"] == 130306)
+    assert row["kind"] == "spoof"
+    assert row["spoofed"] is True
+    assert row["attack_label"] == "wind spoof"
+    assert row["technique"] == "T1692.002"
+
+    rt.set_spoof_sa("48", False)
+    rt.set_attack("gyro", True)
+    plant, frames = rt.tick()
+    heading = next(
+        decode_fields(f)
+        for f in frames
+        if decode_fields(f).get("pgn") == 127250 and decode_fields(f)["sa"] == 35
+    )
+    delta = abs((heading["heading_deg"] - plant.heading_deg + 180) % 360 - 180)
+    assert delta > 20
+    assert "48" not in rt.snapshot()["spoof_sas"]
+    assert "35" in rt.snapshot()["spoof_sas"]
+
+
+def test_toggle_spoof_api_any_device():
+    from opv_sim.app import app, runtime
+
+    runtime.reset("")
+    runtime.running = False
+    with TestClient(app) as client:
+        r = client.post("/api/control", json={"action": "toggle_spoof", "device": "48", "enabled": True})
+        body = r.json()["snapshot"]
+        assert r.json()["ok"] is True
+        assert "48" in body["spoof_sas"]
+        assert body["attack_id"] == "device-spoof"
+        r = client.post("/api/control", json={"action": "toggle_spoof", "device": "35", "enabled": True})
+        body = r.json()["snapshot"]
+        assert body["attacks"]["gyro"] is True
+        assert "35" in body["spoof_sas"]

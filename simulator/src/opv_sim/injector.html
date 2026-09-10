@@ -205,9 +205,17 @@
         display: flex; align-items: center; gap: 6px; font-size: 11px;
         border: 1px solid var(--stroke); padding: 4px 8px; background: var(--bg); cursor: pointer;
       }
-      #attacks .toggles, #devices .toggles {
+      #attacks .toggles {
         display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 6px;
       }
+      #devices .toggles {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 6px;
+      }
+      .device-row {
+        display: flex; flex-direction: column; gap: 2px;
+        border: 1px solid var(--stroke); padding: 4px 6px; background: var(--bg);
+      }
+      .device-row .switch { border: 0; padding: 2px 4px; background: transparent; }
       .switch input { accent-color: var(--ok); width: 16px; height: 16px; }
       .switch.attack input { accent-color: var(--bad); }
       .switch small { color: var(--muted); font-size: 10px; }
@@ -367,17 +375,10 @@
       <footer class="bottom">
         <section class="box" id="attacks">
           <h2>Attacks</h2>
-          <p class="attacks-hint">Injection Hz is in the header. Randomize picks a new rate (1–32) each plant tick.</p>
+          <p class="attacks-hint">Spoof (T1692.002) lies about a talker’s reporting PGNs — pick talkers in Devices. Velocity is a SOG-only lie on GNSS-1 that keeps position true. Injection Hz is in the header.</p>
           <div class="toggles">
-            <label class="switch attack"><input type="checkbox" data-attack="spoof" /> GNSS-1 spoof <small>T1692.002 · 129025</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="spoof_both" /> GNSS-1+2 spoof <small>T1692.002 · gps-spoof-both</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="ais" /> AIS spoof <small>T1692.002 · 129038</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="gyro" /> Gyro spoof <small>T1692.002 · 127250</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="rot" /> ROT spoof <small>T1692.002 · 127251</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="velocity" /> Velocity spoof <small>T1692.002 · 129026 SOG</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="rpm" /> RPM spoof <small>T1692.002 · 127488</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="depth" /> Depth spoof <small>T1692.002 · 128267</small></label>
-            <label class="switch attack"><input type="checkbox" data-attack="battery" /> Battery spoof <small>T1692.002 · 127508</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="spoof" /> Spoof <small>T1692.002 · GNSS-1 spoof, or pick talkers in Devices</small></label>
+            <label class="switch attack"><input type="checkbox" data-attack="velocity" /> Velocity <small>T1692.002 · 129026 SOG only</small></label>
             <label class="switch attack"><input type="checkbox" data-attack="read" /> Read <small>T0801 · ISO Request 59904</small></label>
             <label class="switch attack"><input type="checkbox" data-attack="write" /> Write <small>T1692.001 · T0855 · 127237</small></label>
             <label class="switch attack"><input type="checkbox" data-attack="engine_cmd" /> Engine command <small>T1692.001 · 126208</small></label>
@@ -392,6 +393,7 @@
         </section>
         <section class="box" id="devices">
           <h2>Devices</h2>
+          <p class="attacks-hint">Bus on/off per talker. Spoof lies about that talker’s reporting PGNs.</p>
           <div class="toggles" id="device-toggles"></div>
         </section>
       </footer>
@@ -593,7 +595,10 @@
         if (box.dataset.ready) return;
         const catalog = s.device_catalog || [];
         box.innerHTML = catalog.map((d) =>
-          `<label class="switch"><input type="checkbox" data-device="${esc(d.sa)}" ${d.enabled ? "checked" : ""}/> ${esc(d.name)} <small>SA ${esc(d.sa)} · ${esc(d.segment)}</small></label>`
+          `<div class="device-row">
+            <label class="switch"><input type="checkbox" data-device="${esc(d.sa)}" ${d.enabled ? "checked" : ""}/> ${esc(d.name)} <small>SA ${esc(d.sa)} · ${esc(d.segment)}</small></label>
+            <label class="switch attack"><input type="checkbox" data-spoof-sa="${esc(d.sa)}"/> Spoof <small>T1692.002</small></label>
+          </div>`
         ).join("");
         box.dataset.ready = "1";
       }
@@ -847,9 +852,14 @@
           if (frOut) frOut.value = String(s.frame_copies);
         }
         const devices = s.devices || {};
+        const spoofSas = new Set((s.spoof_sas || []).map(String));
         document.querySelectorAll("[data-device]").forEach((el) => {
           if (document.activeElement === el) return;
           el.checked = devices[el.getAttribute("data-device")] !== false;
+        });
+        document.querySelectorAll("[data-spoof-sa]").forEach((el) => {
+          if (document.activeElement === el) return;
+          el.checked = spoofSas.has(el.getAttribute("data-spoof-sa"));
         });
         document.querySelectorAll(".node[data-sa]").forEach((n) => {
           const sa = n.getAttribute("data-sa");
@@ -859,24 +869,9 @@
             n.classList.toggle("off", !on);
             return;
           }
-          if (sa === "24" && attacks.ais) {
-            n.classList.toggle("silent", false);
-            n.classList.toggle("off", false);
-            return;
-          }
-          if (sa === "40" && attacks.depth) {
-            n.classList.toggle("silent", false);
-            n.classList.toggle("off", false);
-            return;
-          }
-          if (sa === "28" && attacks.battery) {
-            n.classList.toggle("silent", false);
-            n.classList.toggle("off", false);
-            return;
-          }
-          const on = devices[sa] !== false && devices[sa] !== undefined ? devices[sa] : !n.classList.contains("silent");
-          n.classList.toggle("off", devices[sa] === false);
-          n.classList.toggle("silent", devices[sa] === false);
+          const spoofed = spoofSas.has(sa) || (sa === "16" && attacks.velocity);
+          n.classList.toggle("off", devices[sa] === false && !spoofed);
+          n.classList.toggle("silent", devices[sa] === false && !spoofed);
         });
       }
       function renderStats(s) {
@@ -1005,7 +1000,12 @@
       });
       document.getElementById("device-toggles").addEventListener("change", async (ev) => {
         const t = ev.target;
-        if (!(t instanceof HTMLInputElement) || !t.hasAttribute("data-device")) return;
+        if (!(t instanceof HTMLInputElement)) return;
+        if (t.hasAttribute("data-spoof-sa")) {
+          apply(await control("toggle_spoof", { device: t.getAttribute("data-spoof-sa"), enabled: t.checked }));
+          return;
+        }
+        if (!t.hasAttribute("data-device")) return;
         apply(await control("toggle_device", { device: t.getAttribute("data-device"), enabled: t.checked }));
       });
       async function pull() {

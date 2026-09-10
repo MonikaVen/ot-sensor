@@ -131,6 +131,13 @@ def control(body: ControlBody):
             runtime.set_device(body.device, body.enabled)
         except ValueError:
             return {"ok": False, "error": "unknown device"}
+    elif body.action == "toggle_spoof":
+        if body.device is None or body.enabled is None:
+            return {"ok": False, "error": "device and enabled required"}
+        try:
+            runtime.set_spoof_sa(body.device, body.enabled)
+        except ValueError:
+            return {"ok": False, "error": "unknown device"}
     else:
         return {"ok": False, "error": "unknown action"}
     return {"ok": True, "snapshot": runtime.snapshot()}

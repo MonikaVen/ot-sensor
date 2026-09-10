@@ -18,12 +18,15 @@ from opv_sim.twins import (
     FREQ_DEFAULT,
     FREQ_MAX,
     FREQ_MIN,
+    NAMED_SPOOF_SA,
+    SA_TO_NAMED_SPOOF,
     SOG_DEFAULT,
     attacks_for,
     clamp_frames,
     clamp_frequency,
     clamp_sog,
     default_devices,
+    resolve_spoof_sas,
 )
 
 PGN_NAME = {
@@ -252,6 +255,11 @@ def _iso(v):
     return v
 
 
+def _sa_sort(sa) -> tuple:
+    s = str(sa)
+    return (0, int(s)) if s.lstrip("-").isdigit() else (1, s)
+
+
 def _summary(fields: dict) -> str:
     if fields.get("error"):
         return "CAN error frame"
@@ -320,12 +328,13 @@ def _summary(fields: dict) -> str:
     return fields.get("operation_name") or "frame"
 
 
-def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FREQ_DEFAULT) -> dict:
+def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FREQ_DEFAULT, spoof_sas: set | None = None) -> dict:
     fields = decode_fields(frame)
     sa = str(fields.get("sa", ""))
     pgn = int(fields.get("pgn") or 0)
     attack_id = getattr(plant, "attack_id", None) if plant else None
     on = attacks or {}
+    sas = {str(s) for s in (spoof_sas if spoof_sas is not None else resolve_spoof_sas(on))}
     spoofed = False
     kind = "ok"
     technique = None
@@ -358,7 +367,7 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
         kind = "velocity"
         spoofed = True
         technique = "T1692.002"
-    elif (on.get("rpm") or attack_id == "rpm-spoof") and sa in ("0", "1") and pgn == 127488 and frame.segment == "propulsion":
+    elif (on.get("rpm") or attack_id == "rpm-spoof") and sa == "0" and pgn == 127488 and frame.segment == "propulsion":
         kind = "rpm"
         spoofed = True
         technique = "T1692.002"
@@ -366,8 +375,12 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
         kind = "depth"
         spoofed = True
         technique = "T1692.002"
-    elif (on.get("battery") or attack_id == "battery-spoof") and pgn == 127508:
+    elif (on.get("battery") or attack_id == "battery-spoof" or "28" in sas) and pgn == 127508:
         kind = "battery"
+        spoofed = True
+        technique = "T1692.002"
+    elif sa in sas and pgn not in (60928, 59904, 126208, 127237):
+        kind = "spoof"
         spoofed = True
         technique = "T1692.002"
     elif (on.get("gateway_bypass") or attack_id == "gateway-bypass") and sa == "0" and pgn == 127488 and frame.segment == "nav":
@@ -410,6 +423,8 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
         attack_key = "spoof_both"
     elif kind in KIND_TO_ATTACK:
         attack_key = KIND_TO_ATTACK[kind]
+    elif spoofed and sa in sas:
+        attack_key = SA_TO_NAMED_SPOOF.get(sa, "spoof")
     elif spoofed:
         attack_key = next((k for k, v in on.items() if v), "")
     pgn_name = PGN_NAME.get(pgn, f"PGN {pgn}")
@@ -427,7 +442,11 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
         "kind": kind,
         "technique": technique,
         "attack_key": attack_key,
-        "attack_label": ATTACK_LABEL.get(attack_key, "benign" if kind == "ok" and not spoofed else (kind or "attack")),
+        "attack_label": (
+            f"{SA_NAME.get(sa, 'SA ' + sa)} spoof"
+            if spoofed and sa in sas and sa not in SA_TO_NAMED_SPOOF
+            else ATTACK_LABEL.get(attack_key, "benign" if kind == "ok" and not spoofed else (kind or "attack"))
+        ),
         "hz": frequency,
         "burst": burst,
         "error": bool(frame.error),
@@ -435,12 +454,12 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
     }
 
 
-def attack_log_rows(frames, plant, attacks: dict | None, frequency: int) -> list[dict]:
+def attack_log_rows(frames, plant, attacks: dict | None, frequency: int, spoof_sas: set | None = None) -> list[dict]:
     """Build the injector attack log. Non-burst attack frames are repeated `frequency` times."""
     hz = clamp_frequency(frequency)
     rows: list[dict] = []
     for frame in frames:
-        row = emission_row(frame, plant, attacks, hz)
+        row = emission_row(frame, plant, attacks, hz, spoof_sas=spoof_sas)
         copies = hz if row["kind"] != "ok" and not row["burst"] else 1
         for _ in range(copies):
             rows.append(dict(row))
@@ -462,6 +481,7 @@ class SimRuntime:
         self.log_archive: deque[dict] = deque(maxlen=LOG_MAX)
         self.attacks = attacks_for(self.attack_id)
         self.devices = default_devices()
+        self.extra_spoof_sas: set[str] = set()
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
         self.intensity = 1.0 if gnss else 0.0
         self.frequency = FREQ_DEFAULT
@@ -478,6 +498,8 @@ class SimRuntime:
             if self.attacks.get(key):
                 aid = ATTACK_IDS.get(key, key)
                 break
+        if aid is None and self.extra_spoof_sas:
+            aid = "device-spoof"
         self.sim = OpvSimulator(
             sim_mode=self.mode,
             attack_id=aid,
@@ -486,6 +508,7 @@ class SimRuntime:
         )
         self.sim.twins.enabled = dict(self.devices)
         self.sim.injector.attacks = dict(self.attacks)
+        self.sim.injector.extra_spoof_sas = set(self.extra_spoof_sas)
         self.sim.injector.intensity = self.intensity
         self.sim.injector.frequency = self.frequency
         self.sim.injector.frame_copies = self.frame_copies
@@ -502,6 +525,7 @@ class SimRuntime:
         self.log_archive.clear()
         self.attacks = attacks_for(self.attack_id)
         self.devices = default_devices()
+        self.extra_spoof_sas = set()
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
         self.intensity = 1.0 if gnss else 0.0
         self.frequency = FREQ_DEFAULT
@@ -536,15 +560,12 @@ class SimRuntime:
         self.frame_copies = clamp_frames(n)
         self.sim.injector.frame_copies = self.frame_copies
 
-    def set_attack(self, kind: str, enabled: bool) -> None:
-        if kind not in ATTACK_KEYS:
-            raise ValueError(kind)
-        self.attacks[kind] = bool(enabled)
+    def spoof_sas(self) -> set[str]:
+        return resolve_spoof_sas(self.attacks, self.extra_spoof_sas)
+
+    def _sync_attack_meta(self) -> None:
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
         self.intensity = 1.0 if gnss else 0.0
-        self.sim.injector.attacks = dict(self.attacks)
-        self.sim.injector.intensity = self.intensity
-        self.sim.injector.frequency = self.frequency
         active = [k for k, v in self.attacks.items() if v]
         if self.attacks.get("spoof_both"):
             self.attack_id = "gps-spoof-both"
@@ -554,10 +575,56 @@ class SimRuntime:
             self.attack_id = "gps-spoof-primary"
             self.sim.engine.attack_id = "gps-spoof-primary"
             self.sim.engine.scenario_id = "gps-spoof-underway"
-        else:
-            self.attack_id = ATTACK_IDS.get(active[0], active[0]) if active else ""
+        elif active:
+            self.attack_id = ATTACK_IDS.get(active[0], active[0])
             self.sim.engine.attack_id = self.attack_id or None
             self.sim.engine.scenario_id = "underway"
+        elif self.extra_spoof_sas:
+            self.attack_id = "device-spoof"
+            self.sim.engine.attack_id = "device-spoof"
+            self.sim.engine.scenario_id = "underway"
+        else:
+            self.attack_id = ""
+            self.sim.engine.attack_id = None
+            self.sim.engine.scenario_id = "underway"
+        self.sim.injector.attacks = dict(self.attacks)
+        self.sim.injector.extra_spoof_sas = set(self.extra_spoof_sas)
+        self.sim.injector.intensity = self.intensity
+        self.sim.injector.frequency = self.frequency
+
+    def _force_spoof_devices(self, sas) -> None:
+        for sa in sas:
+            sa = str(sa)
+            if sa in self.devices:
+                self.devices[sa] = True
+                self.sim.twins.set_device(sa, True)
+
+    def set_attack(self, kind: str, enabled: bool) -> None:
+        if kind not in ATTACK_KEYS:
+            raise ValueError(kind)
+        self.attacks[kind] = bool(enabled)
+        if enabled:
+            self._force_spoof_devices(NAMED_SPOOF_SA.get(kind, ()))
+        self._sync_attack_meta()
+
+    def set_spoof_sa(self, sa: str, enabled: bool) -> None:
+        sa = str(sa)
+        if sa not in self.devices:
+            raise ValueError(sa)
+        named = SA_TO_NAMED_SPOOF.get(sa)
+        if named:
+            self.set_attack(named, enabled)
+            if named == "gyro":
+                self.set_attack("rot", enabled)
+            return
+        if enabled:
+            self.extra_spoof_sas.add(sa)
+            self.set_device(sa, True)
+        else:
+            self.extra_spoof_sas.discard(sa)
+            if sa == "17":
+                self.attacks["spoof_both"] = False
+        self._sync_attack_meta()
 
     def set_device(self, sa: str, enabled: bool) -> None:
         sa = str(sa)
@@ -565,22 +632,61 @@ class SimRuntime:
             raise ValueError(sa)
         self.devices[sa] = bool(enabled)
         self.sim.twins.set_device(sa, enabled)
+        if enabled:
+            return
+        named = SA_TO_NAMED_SPOOF.get(sa)
+        changed = False
+        if named and self.attacks.get(named):
+            self.attacks[named] = False
+            if named == "gyro":
+                self.attacks["rot"] = False
+            changed = True
+        if sa in self.extra_spoof_sas:
+            self.extra_spoof_sas.discard(sa)
+            changed = True
+        if sa in ("16", "17") and self.attacks.get("spoof_both"):
+            self.attacks["spoof_both"] = False
+            changed = True
+        if changed:
+            self._sync_attack_meta()
 
     def _record_hist(self, frames, tick_n: int) -> None:
         decoded = [decode_fields(f) for f in frames]
         ts = _iso(getattr(frames[0], "t", None)) if frames else None
         if not ts:
             ts = datetime.now(timezone.utc).isoformat()
+        sas = self.spoof_sas()
+        named_live = {
+            "spoof": "16" in sas,
+            "spoof_both": "16" in sas and "17" in sas,
+            "ais": "24" in sas,
+            "gyro": "35" in sas,
+            "rot": "35" in sas,
+            "rpm": "0" in sas,
+            "depth": "40" in sas,
+            "battery": "28" in sas,
+        }
         for key, *_rest in ATTACK_CATALOG:
             samples = attack_samples(key, decoded)
             if not samples:
                 continue
-            side = "attack" if self.attacks.get(key) else "benign"
+            side = "attack" if self.attacks.get(key) or named_live.get(key) else "benign"
             self.hist[key][side].extend(
                 {"t": ts, "tick": tick_n, "v": float(v), "sa": str(sa)} for v, sa in samples
             )
 
     def histogram_payload(self) -> list[dict]:
+        sas = self.spoof_sas()
+        named_live = {
+            "spoof": "16" in sas,
+            "spoof_both": "16" in sas and "17" in sas,
+            "ais": "24" in sas,
+            "gyro": "35" in sas,
+            "rot": "35" in sas,
+            "rpm": "0" in sas,
+            "depth": "40" in sas,
+            "battery": "28" in sas,
+        }
         return [
             {
                 "key": k,
@@ -589,7 +695,7 @@ class SimRuntime:
                 "unit": HIST_UNIT.get(k, ""),
                 "benign": _hist_series(self.hist[k]["benign"]),
                 "attack": _hist_series(self.hist[k]["attack"]),
-                "active": bool(self.attacks.get(k)),
+                "active": bool(self.attacks.get(k) or named_live.get(k)),
             }
             for k, label, tech, _detail in ATTACK_CATALOG
         ]
@@ -598,13 +704,15 @@ class SimRuntime:
         if self.frequency_random:
             self.frequency = random.randint(FREQ_MIN, FREQ_MAX)
             self.sim.injector.frequency = self.frequency
+        self.sim.injector.extra_spoof_sas = set(self.extra_spoof_sas)
         plant, frames = self.sim.tick(self.elapsed, attacks=self.attacks, frequency=self.frequency)
         self.plant = plant
         self.last_frames = frames
         tick_n = self.ticks + 1
         self._record_hist(frames, tick_n)
+        sas = self.spoof_sas()
         for f in frames:
-            row = emission_row(f, plant, self.attacks, self.frequency)
+            row = emission_row(f, plant, self.attacks, self.frequency, spoof_sas=sas)
             row["tick"] = tick_n
             self.log_archive.append(row)
         self.elapsed += 1.0
@@ -633,6 +741,7 @@ class SimRuntime:
             "attacks": dict(self.attacks),
             "frequency": self.frequency,
             "frequency_random": self.frequency_random,
+            "spoof_sas": sorted(self.spoof_sas(), key=_sa_sort),
             "histograms": self.histogram_payload(),
             "frames": [
                 {
@@ -655,9 +764,12 @@ class SimRuntime:
             attack_id = "gps-spoof-primary"
         elif active:
             attack_id = ATTACK_IDS.get(active[0], active[0])
+        elif self.extra_spoof_sas:
+            attack_id = "device-spoof"
         else:
             attack_id = None
         hz = self.frequency
+        sas = self.spoof_sas()
         return {
             "sim_mode": self.mode,
             "running": self.running,
@@ -672,6 +784,7 @@ class SimRuntime:
                 {"sa": str(sa), "name": name, "segment": seg, "enabled": self.devices[str(sa)]}
                 for sa, seg, name, _ in DEVICE_CATALOG
             ],
+            "spoof_sas": sorted(sas, key=_sa_sort),
             "intensity": round(self.intensity, 3),
             "frequency": hz,
             "frequency_random": self.frequency_random,
@@ -681,7 +794,7 @@ class SimRuntime:
             "ticks": self.ticks,
             "frames_this_tick": len(self.last_frames),
             "labels": len(self.sim.labels.records),
-            "emissions": attack_log_rows(self.last_frames, plant, self.attacks, hz),
+            "emissions": attack_log_rows(self.last_frames, plant, self.attacks, hz, spoof_sas=sas),
             "log_archive": list(self.log_archive)[-LOG_SNAP:],
             "histograms": self.histogram_payload(),
             "plant": {
