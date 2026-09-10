@@ -51,6 +51,11 @@ def test_runtime_inventory_and_incident(tmp_path):
     hist = {h["key"]: h for h in snap["histograms"]}
     assert "spoof" in hist and "gyro" in hist and "pgn_flood" in hist
     assert hist["spoof"]["attack"]
+    archive = snap["log_archive"]
+    assert archive
+    assert any(m["source"] == "attack" for m in archive)
+    assert any(m["source"] == "benign" for m in archive)
+    assert all("id" in m and "t" in m for m in archive[:5])
     rt.sim.set_attack("read", False)
     rt.sim.set_attack("gyro", True)
     rt.step()
@@ -189,6 +194,7 @@ def test_reset_clears_sensor_history(tmp_path):
     assert snap["assets"] == []
     assert snap["incidents"] == []
     assert snap["message_flow"] == []
+    assert snap["log_archive"] == []
     assert snap["ticks"] == 0
     assert snap["attack_started_at"] is None
     assert not inv.exists()

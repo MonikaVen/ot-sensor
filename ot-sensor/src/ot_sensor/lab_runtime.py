@@ -32,6 +32,7 @@ GNSS_READING_KEYS = (
 
 SPOOF_SA = "16"
 FLOW_MAX = 100
+LOG_MAX = 3000
 MONITOR_MAX = 90
 HP_HIST_MAX = 90
 
@@ -69,6 +70,7 @@ class LabRuntime:
         self.seen_incident_ids: set[str] = set()
         self.new_incident_ids: list[str] = []
         self.message_flow: deque[dict] = deque(maxlen=FLOW_MAX)
+        self.log_archive: deque[dict] = deque(maxlen=LOG_MAX)
         self.monitor: deque[dict] = deque(maxlen=MONITOR_MAX)
         self.hp_history: deque[dict] = deque(maxlen=HP_HIST_MAX)
         self.last_lstm: dict | None = None
@@ -76,6 +78,7 @@ class LabRuntime:
         self.traffic_talkers: set[str] = set()
         self.traffic_attacked: set[str] = set()
         self._ingested_ticks = -1
+        self._log_seq = 0
         self.assistant = CyberPalAssistant(self.repo, self.work)
         self._reset_pipeline()
 
@@ -99,6 +102,7 @@ class LabRuntime:
         self.seen_incident_ids.clear()
         self.new_incident_ids.clear()
         self.message_flow.clear()
+        self.log_archive.clear()
         self.monitor.clear()
         self.hp_history.clear()
         self.last_lstm = None
@@ -106,6 +110,7 @@ class LabRuntime:
         self.traffic_talkers.clear()
         self.traffic_attacked.clear()
         self._ingested_ticks = -1
+        self._log_seq = 0
         self.assistant.clear()
         self._reset_pipeline()
         inv = self.work / "assets" / self.mode / "opv1" / "inventory.json"
@@ -205,9 +210,14 @@ class LabRuntime:
         for fr in frames:
             row = emission_row(fr, plant, attacks)
             is_attack = bool(row.get("spoofed") or row.get("kind") not in (None, "ok"))
+            row["t"] = _iso(fr.t)
+            self._log_seq += 1
+            archived = dict(row)
+            archived["id"] = str(self._log_seq)
+            archived["source"] = "attack" if is_attack else "benign"
+            self.log_archive.append(archived)
             if row["sa"] != SPOOF_SA and not is_attack:
                 continue
-            row["t"] = _iso(fr.t)
             self.message_flow.append(row)
             if is_attack and self.attack_started_at is None:
                 self.attack_started_at = row["t"]
@@ -395,6 +405,7 @@ class LabRuntime:
             "models": _models_snapshot(self.repo, sensor, list(self.monitor), self.last_lstm or getattr(sensor, "last_lstm", None), self.ticks > 0),
             "attack_started_at": self.attack_started_at,
             "message_flow": list(reversed(self.message_flow)),
+            "log_archive": list(reversed(self.log_archive)),
             "flow_asset": {"asset_id": SPOOF_SA, "name": "GNSS-1"},
             "histograms": self._histograms(),
             "honeypot": honeypot,

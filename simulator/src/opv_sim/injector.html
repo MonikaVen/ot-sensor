@@ -117,12 +117,6 @@
         display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
         padding: 12px 14px 8px; flex-shrink: 0;
       }
-      .rail-tabs { display: flex; gap: 6px; }
-      .rail-tabs button {
-        background: var(--bg); color: var(--text); border: 1px solid var(--stroke);
-        padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
-      }
-      .rail-tabs button.active { border-color: var(--accent); color: var(--accent); }
       #log { list-style: none; margin: 0; padding: 8px 0 16px; overflow: auto; flex: 1; }
       #log li {
         padding: 8px 14px; border-bottom: 1px solid var(--stroke); font-size: 12px;
@@ -137,20 +131,6 @@
       #log li.attack strong, #log li.spoofed strong { color: var(--bad); }
       #log .meta { color: var(--muted); font-size: 10px; margin-bottom: 2px; }
       #log .hex { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 10px; }
-      #plots { display: none; overflow: auto; flex: 1; padding: 0 12px 16px; min-height: 0; }
-      #plots.visible { display: block; }
-      #log.hidden { display: none; }
-      .plots-note { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
-      .plots-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
-      .hist-card {
-        border: 1px solid var(--stroke); background: var(--bg); padding: 8px 10px 10px;
-      }
-      .hist-card.active { border-color: var(--bad); }
-      .hist-card h3 { margin: 0 0 2px; font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--text); }
-      .hist-card .muted { color: var(--muted); font-size: 10px; margin: 0 0 6px; }
-      .hist-svg { width: 100%; height: 92px; display: block; background: #0e1318; }
-      .hist-legend { display: flex; gap: 12px; font-size: 10px; color: var(--muted); margin-top: 4px; }
-      .hist-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: -1px; }
       .row-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
       footer.bottom {
         display: flex; flex-direction: column; gap: 0;
@@ -331,16 +311,8 @@
       <aside class="bus-log">
         <div class="rail-head">
           <h2 id="rail-title">Emitted messages</h2>
-          <div class="rail-tabs">
-            <button type="button" class="active" data-rail="messages">Messages</button>
-            <button type="button" data-rail="plots">Plots</button>
-          </div>
         </div>
         <ol id="log"></ol>
-        <div id="plots">
-          <p class="plots-note">Benign (green) vs attack (red) for each overlay. Red is the GNSS spoof color.</p>
-          <div class="plots-grid" id="plots-grid"></div>
-        </div>
       </aside>
     </div>
     <script>
@@ -604,76 +576,6 @@
         read: "READ", write: "WRITE", engine: "ENG", flood: "FLOOD",
         error: "ERR", rogue: "T0848", bypass: "BYPASS",
       };
-      let rail = "messages";
-      function setRail(name) {
-        rail = name;
-        document.querySelectorAll("[data-rail]").forEach((b) => b.classList.toggle("active", b.getAttribute("data-rail") === name));
-        document.getElementById("log").classList.toggle("hidden", name !== "messages");
-        document.getElementById("plots").classList.toggle("visible", name === "plots");
-        document.getElementById("rail-title").textContent = name === "plots" ? "Attack plots" : "Emitted messages";
-      }
-      function histSvg(benign, attack) {
-        const w = 280, h = 88, padL = 28, padR = 8, padT = 8, padB = 18;
-        const nBins = 10;
-        const vals = benign.concat(attack);
-        if (!vals.length) {
-          return `<svg class="hist-svg" viewBox="0 0 ${w} ${h}"><text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#8b97a8" font-size="11">waiting for samples</text></svg>`;
-        }
-        let lo = Math.min(...vals), hi = Math.max(...vals);
-        if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
-        const span = hi - lo;
-        const binsB = Array(nBins).fill(0);
-        const binsA = Array(nBins).fill(0);
-        const place = (arr, bins) => {
-          arr.forEach((v) => {
-            const i = Math.min(nBins - 1, Math.floor(((v - lo) / span) * nBins));
-            bins[i]++;
-          });
-        };
-        place(benign, binsB);
-        place(attack, binsA);
-        const peak = Math.max(1, ...binsB, ...binsA);
-        const innerW = w - padL - padR;
-        const innerH = h - padT - padB;
-        const gap = 2;
-        const slot = innerW / nBins;
-        const barW = Math.max(2, (slot - gap) / 2);
-        const yAt = (c) => padT + innerH - (c / peak) * innerH;
-        const bars = [];
-        for (let i = 0; i < nBins; i++) {
-          const x = padL + i * slot;
-          const hb = innerH - (yAt(binsB[i]) - padT);
-          const ha = innerH - (yAt(binsA[i]) - padT);
-          bars.push(`<rect x="${x.toFixed(1)}" y="${yAt(binsB[i]).toFixed(1)}" width="${barW}" height="${Math.max(0, hb).toFixed(1)}" fill="#3caf7a"/>`);
-          bars.push(`<rect x="${(x + barW + 1).toFixed(1)}" y="${yAt(binsA[i]).toFixed(1)}" width="${barW}" height="${Math.max(0, ha).toFixed(1)}" fill="#d45b4c"/>`);
-        }
-        const fmt = (v) => Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2);
-        return `<svg class="hist-svg" viewBox="0 0 ${w} ${h}" role="img">
-          <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="#2a3340"/>
-          <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="#2a3340"/>
-          ${bars.join("")}
-          <text x="${padL}" y="${h - 4}" fill="#8b97a8" font-size="9">${fmt(lo)}</text>
-          <text x="${w - padR}" y="${h - 4}" text-anchor="end" fill="#8b97a8" font-size="9">${fmt(hi)}</text>
-        </svg>`;
-      }
-      function renderPlots(s) {
-        const grid = document.getElementById("plots-grid");
-        if (!grid) return;
-        const rows = s.histograms || [];
-        if (!rows.length) {
-          grid.innerHTML = `<p class="muted">No histogram data yet.</p>`;
-          return;
-        }
-        grid.innerHTML = rows.map((h) => {
-          const nB = (h.benign || []).length, nA = (h.attack || []).length;
-          return `<article class="hist-card ${h.active ? "active" : ""}">
-            <h3>${esc(h.label)}</h3>
-            <p class="muted">${esc(h.technique || "")} · ${esc(h.unit || "")} · benign n=${nB} · attack n=${nA}</p>
-            ${histSvg(h.benign || [], h.attack || [])}
-            <p class="hist-legend"><span><i style="background:#3caf7a"></i>benign</span><span><i style="background:#d45b4c"></i>attack</span></p>
-          </article>`;
-        }).join("");
-      }
       function prependLog(m) {
         const log = document.getElementById("log");
         const li = document.createElement("li");
@@ -710,13 +612,7 @@
         renderStats(s);
         renderMotion(s);
         playEmissions(s);
-        renderPlots(s);
       }
-      document.querySelector(".rail-tabs").addEventListener("click", (ev) => {
-        const b = ev.target.closest("[data-rail]");
-        if (!b) return;
-        setRail(b.getAttribute("data-rail"));
-      });
       document.getElementById("run").onclick = async () => {
         const s = await snap();
         apply(await control(s.running ? "pause" : "start"));

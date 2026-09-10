@@ -127,6 +127,7 @@ export type Incident = {
 };
 
 export type FlowMessage = {
+  id?: string;
   t: string;
   sa: string;
   name: string;
@@ -138,6 +139,12 @@ export type FlowMessage = {
   spoofed: boolean;
   kind?: string;
   technique?: string | null;
+  source?: "benign" | "attack";
+};
+
+export type HistogramSample = {
+  t?: string;
+  v: number;
 };
 
 export type HistogramRow = {
@@ -145,8 +152,8 @@ export type HistogramRow = {
   label: string;
   technique: string;
   unit: string;
-  benign: number[];
-  attack: number[];
+  benign: Array<number | HistogramSample>;
+  attack: Array<number | HistogramSample>;
   active: boolean;
 };
 
@@ -197,6 +204,7 @@ export type Snapshot = {
   stix_path: string | null;
   attack_started_at?: string | null;
   message_flow?: FlowMessage[];
+  log_archive?: FlowMessage[];
   histograms?: HistogramRow[];
   flow_asset?: { asset_id: string; name: string };
   rules?: {

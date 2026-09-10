@@ -5,6 +5,10 @@ from opv_sim.twins import ATTACK_CATALOG, DEVICE_CATALOG
 from otlab.pgn import decode_fields
 
 
+def hist_v(item):
+    return item["v"] if isinstance(item, dict) else item
+
+
 def test_sim_runtime_spoof_then_underway():
     rt = SimRuntime("dev", "gps-spoof-primary")
     plant, _frames = rt.tick()
@@ -117,10 +121,9 @@ def test_sim_control_api_sets_attack():
         assert 'id="devices"' in r.text
         assert "#log li.attack" in r.text
         assert "#log li.spoofed" in r.text
-        assert 'data-rail="plots"' in r.text
-        assert 'id="plots-grid"' in r.text
-        assert "#3caf7a" in r.text
         assert "#d45b4c" in r.text
+        assert 'data-rail="plots"' not in r.text
+        assert 'id="plots-grid"' not in r.text
         assert 'data-sa="40"' in r.text
         assert 'data-sa="48"' in r.text
         assert 'data-sa="28"' in r.text
@@ -143,27 +146,28 @@ def test_histograms_benign_and_attack_per_overlay():
     assert rows["spoof"]["unit"] == "lat °"
     assert not rows["spoof"]["attack"]
     assert rows["spoof"]["active"] is False
-    lat_benign = rows["spoof"]["benign"][-1]
-    heading_benign = rows["gyro"]["benign"][-1]
-    flood_benign = rows["pgn_flood"]["benign"][-1]
+    lat_benign = hist_v(rows["spoof"]["benign"][-1])
+    heading_benign = hist_v(rows["gyro"]["benign"][-1])
+    flood_benign = hist_v(rows["pgn_flood"]["benign"][-1])
+    assert rows["spoof"]["benign"][-1]["t"]
     rt.set_attack("spoof", True)
     rt.tick()
     rows = {h["key"]: h for h in rt.histogram_payload()}
     assert rows["spoof"]["attack"]
     assert rows["spoof"]["active"] is True
-    assert abs(rows["spoof"]["attack"][-1] - lat_benign) > 1e-4
+    assert abs(hist_v(rows["spoof"]["attack"][-1]) - lat_benign) > 1e-4
     rt.set_attack("spoof", False)
     rt.set_attack("gyro", True)
     rt.tick()
     rows = {h["key"]: h for h in rt.histogram_payload()}
     assert rows["gyro"]["attack"]
-    assert abs(rows["gyro"]["attack"][-1] - heading_benign) > 5
+    assert abs(hist_v(rows["gyro"]["attack"][-1]) - heading_benign) > 5
     rt.set_attack("gyro", False)
     rt.set_attack("pgn_flood", True)
     rt.set_device("35", True)
     rt.tick()
     rows = {h["key"]: h for h in rt.histogram_payload()}
-    assert rows["pgn_flood"]["attack"][-1] > flood_benign
+    assert hist_v(rows["pgn_flood"]["attack"][-1]) > flood_benign
     assert rows["pgn_flood"]["unit"] == "frames/tick"
 
 
@@ -264,6 +268,7 @@ def test_tap_endpoint_exposes_raw_frames():
         assert keys == {k for k, *_ in ATTACK_CATALOG}
         spoof = next(h for h in body["histograms"] if h["key"] == "spoof")
         assert spoof["attack"]
+        assert "v" in spoof["attack"][-1]
 
 
 def test_frequency_scales_flood_and_attack_log():

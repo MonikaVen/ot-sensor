@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 
 from otlab.pgn import decode_fields
 from opv_sim.lab import OpvSimulator
@@ -78,7 +78,7 @@ SA_NAME = {
 }
 
 TRACK_MAX = 180
-HIST_MAX = 96
+HIST_MAX = 240
 COUNT_ATTACKS = {
     "read",
     "write",
@@ -202,6 +202,16 @@ def empty_hist() -> dict[str, dict[str, deque]]:
         k: {"benign": deque(maxlen=HIST_MAX), "attack": deque(maxlen=HIST_MAX)}
         for k, *_rest in ATTACK_CATALOG
     }
+
+
+def _hist_series(items) -> list[dict]:
+    out = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append({"t": item.get("t"), "v": round(float(item["v"]), 5)})
+        else:
+            out.append({"v": round(float(item), 5)})
+    return out
 
 
 def _iso(v):
@@ -496,12 +506,15 @@ class SimRuntime:
 
     def _record_hist(self, frames) -> None:
         decoded = [decode_fields(f) for f in frames]
+        ts = _iso(getattr(frames[0], "t", None)) if frames else None
+        if not ts:
+            ts = datetime.now(timezone.utc).isoformat()
         for key, *_rest in ATTACK_CATALOG:
             samples = attack_samples(key, decoded)
             if not samples:
                 continue
             side = "attack" if self.attacks.get(key) else "benign"
-            self.hist[key][side].extend(samples)
+            self.hist[key][side].extend({"t": ts, "v": float(v)} for v in samples)
 
     def histogram_payload(self) -> list[dict]:
         return [
@@ -510,8 +523,8 @@ class SimRuntime:
                 "label": label,
                 "technique": tech,
                 "unit": HIST_UNIT.get(k, ""),
-                "benign": [round(v, 5) for v in self.hist[k]["benign"]],
-                "attack": [round(v, 5) for v in self.hist[k]["attack"]],
+                "benign": _hist_series(self.hist[k]["benign"]),
+                "attack": _hist_series(self.hist[k]["attack"]),
                 "active": bool(self.attacks.get(k)),
             }
             for k, label, tech, _detail in ATTACK_CATALOG
