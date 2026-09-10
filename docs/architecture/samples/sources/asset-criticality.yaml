@@ -8,19 +8,35 @@ criticality:
   GNSS-1: { asset_id: "16", segment: nav, criticality: 5, nis2_service: navigation }
   GNSS-2: { asset_id: "17", segment: nav, criticality: 5, nis2_service: navigation }
   gyro: { asset_id: "35", segment: nav, criticality: 5, nis2_service: navigation }
+  echo: { asset_id: "40", segment: nav, criticality: 4, nis2_service: navigation }
+  wind: { asset_id: "48", segment: nav, criticality: 3, nis2_service: navigation }
   autopilot: { asset_id: "56", segment: nav, criticality: 5, nis2_service: navigation }
   rudder: { asset_id: "52", segment: nav, criticality: 5, nis2_service: navigation }
   AIS: { asset_id: "24", segment: nav, criticality: 4, nis2_service: navigation }
   MFD: { asset_id: "60", segment: nav, criticality: 3, nis2_service: navigation }
   engine-port: { asset_id: "0", segment: propulsion, criticality: 4, nis2_service: propulsion }
   engine-stbd: { asset_id: "1", segment: propulsion, criticality: 4, nis2_service: propulsion }
+  gear-port: { asset_id: "4", segment: propulsion, criticality: 4, nis2_service: propulsion }
+  gear-stbd: { asset_id: "5", segment: propulsion, criticality: 4, nis2_service: propulsion }
+  fuel: { asset_id: "8", segment: propulsion, criticality: 4, nis2_service: propulsion }
   thruster: { asset_id: "12", segment: propulsion, criticality: 4, nis2_service: propulsion }
   genset-1: { asset_id: "20", segment: power, criticality: 4, nis2_service: power }
+  genset-2: { asset_id: "21", segment: power, criticality: 4, nis2_service: power }
+  battery: { asset_id: "28", segment: power, criticality: 4, nis2_service: power }
+  switchbank: { asset_id: "32", segment: power, criticality: 3, nis2_service: power }
+  environment: { asset_id: "80", segment: aux, criticality: 2, nis2_service: none }
+  tanks: { asset_id: "84", segment: aux, criticality: 3, nis2_service: none }
+  bilge-fire: { asset_id: "88", segment: aux, criticality: 5, nis2_service: none }
   decoy: { asset_id: "99", segment: nav, criticality: 1, nis2_service: none }
 
 dependencies:
   - { asset: autopilot, depends_on: [GNSS-1, GNSS-2, gyro] }
   - { asset: rudder, depends_on: [autopilot] }
   - { asset: AIS, depends_on: [GNSS-1] }
-  - { asset: MFD, depends_on: [GNSS-1, GNSS-2, gyro] }
+  - { asset: MFD, depends_on: [GNSS-1, GNSS-2, gyro, echo, wind] }
+  - { asset: gear-port, depends_on: [engine-port] }
+  - { asset: gear-stbd, depends_on: [engine-stbd] }
+  - { asset: fuel, depends_on: [engine-port, engine-stbd] }
   - { asset: thruster, depends_on: [genset-1] }
+  - { asset: battery, depends_on: [genset-1] }
+  - { asset: switchbank, depends_on: [battery, genset-1] }

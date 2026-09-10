@@ -171,10 +171,12 @@
             <div class="drops">
               <div class="node" data-sa="16"><b>GNSS-1</b><span>SA 16 · 129025</span></div>
               <div class="node" data-sa="17"><b>GNSS-2</b><span>SA 17 · 129025</span></div>
-              <div class="node" data-sa="35"><b>gyro</b><span>SA 35 · 127250</span></div>
-              <div class="node silent" data-sa="24"><b>AIS</b><span>SA 24</span></div>
-              <div class="node silent" data-sa="56"><b>autopilot</b><span>SA 56</span></div>
-              <div class="node silent" data-sa="52"><b>rudder</b><span>SA 52</span></div>
+              <div class="node" data-sa="35"><b>gyro</b><span>SA 35 · 127250 / 127257</span></div>
+              <div class="node" data-sa="40"><b>echo</b><span>SA 40 · 128267 / 128259</span></div>
+              <div class="node" data-sa="48"><b>wind</b><span>SA 48 · 130306</span></div>
+              <div class="node silent" data-sa="24"><b>AIS</b><span>SA 24 · 129038 / 129794</span></div>
+              <div class="node silent" data-sa="56"><b>autopilot</b><span>SA 56 · 127237 status</span></div>
+              <div class="node silent" data-sa="52"><b>rudder</b><span>SA 52 · 127245</span></div>
               <div class="node silent" data-sa="60"><b>MFD</b><span>SA 60 · consumer</span></div>
               <div class="node silent" data-sa="99"><b>decoy</b><span>SA 99 · honeypot</span></div>
               <div class="node silent" data-sa="44"><b>rogue</b><span>SA 44 · injector</span></div>
@@ -186,8 +188,11 @@
             <h2>propulsion backbone</h2>
             <div class="trunk prop" data-seg="propulsion"></div>
             <div class="drops">
-              <div class="node" data-sa="0"><b>engine-port</b><span>SA 0 · 127488</span></div>
-              <div class="node" data-sa="1"><b>engine-stbd</b><span>SA 1 · 127488</span></div>
+              <div class="node" data-sa="0"><b>engine-port</b><span>SA 0 · 127488 / 127489</span></div>
+              <div class="node" data-sa="1"><b>engine-stbd</b><span>SA 1 · 127488 / 127489</span></div>
+              <div class="node" data-sa="4"><b>gear-port</b><span>SA 4 · 127493</span></div>
+              <div class="node" data-sa="5"><b>gear-stbd</b><span>SA 5 · 127493</span></div>
+              <div class="node" data-sa="8"><b>fuel</b><span>SA 8 · 127505</span></div>
               <div class="node silent" data-sa="12"><b>thruster</b><span>SA 12</span></div>
             </div>
           </section>
@@ -197,14 +202,19 @@
             <h2>power backbone</h2>
             <div class="trunk power" data-seg="power"></div>
             <div class="drops">
-              <div class="node silent" data-sa="20"><b>genset-1</b><span>SA 20</span></div>
+              <div class="node silent" data-sa="20"><b>genset-1</b><span>SA 20 · 127488</span></div>
+              <div class="node silent" data-sa="21"><b>genset-2</b><span>SA 21 · 127488</span></div>
+              <div class="node" data-sa="28"><b>battery</b><span>SA 28 · 127508</span></div>
+              <div class="node silent" data-sa="32"><b>switchbank</b><span>SA 32 · 127501</span></div>
             </div>
           </section>
           <section class="col aux">
             <h2>aux backbone</h2>
             <div class="trunk aux" data-seg="aux"></div>
             <div class="drops">
-              <div class="node silent"><b>tanks / env</b><span>no twins this lab</span></div>
+              <div class="node" data-sa="80"><b>environment</b><span>SA 80 · 130311</span></div>
+              <div class="node" data-sa="84"><b>tanks</b><span>SA 84 · 127505</span></div>
+              <div class="node" data-sa="88"><b>bilge-fire</b><span>SA 88 · 127501</span></div>
             </div>
           </section>
         </div>
@@ -462,7 +472,12 @@
             n.classList.toggle("off", false);
             return;
           }
-          if (sa === "20" && attacks.battery) {
+          if (sa === "40" && attacks.depth) {
+            n.classList.toggle("silent", false);
+            n.classList.toggle("off", false);
+            return;
+          }
+          if (sa === "28" && attacks.battery) {
             n.classList.toggle("silent", false);
             n.classList.toggle("off", false);
             return;

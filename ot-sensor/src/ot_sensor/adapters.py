@@ -26,8 +26,8 @@ class Nmea2000Adapter:
         sa = str(fields["sa"])
         da = None if fields["da"] == 255 else str(fields["da"])
         privileged = bool(fields.get("privileged"))
-        is_control = pgn in (127237,)
-        is_write = pgn in (127237,)
+        is_control = pgn == 127237 and privileged
+        is_write = pgn == 127237 and privileged
         category = "identity" if pgn == 60928 else "read" if pgn == 59904 else "control" if is_write else "report"
         value = {
             k: v

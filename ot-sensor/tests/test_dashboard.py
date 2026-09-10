@@ -16,6 +16,8 @@ def test_runtime_inventory_and_incident(tmp_path):
     names = {a["name"] for a in snap["assets"]}
     assert "GNSS-1" in names
     assert "engine-port" in names
+    assert "echo" in names
+    assert "battery" in names
     assert "autopilot" not in names
     assert all(a["live"] or a["channels_seen"] for a in snap["assets"])
     assert (tmp_path / "assets" / "dev" / "opv1" / "inventory.json").exists()

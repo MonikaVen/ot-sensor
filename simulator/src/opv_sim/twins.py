@@ -7,20 +7,30 @@ from otlab.bus import InMemoryCanBus
 from otlab.geo import dest_point
 from otlab.pgn import (
     encode_ais_position,
+    encode_ais_static,
+    encode_attitude,
     encode_battery,
+    encode_binary_status,
     encode_claim,
     encode_cog_sog,
     encode_depth,
     encode_dops,
     encode_engine_control,
+    encode_engine_dynamic,
+    encode_environment,
     encode_error_frame,
+    encode_fluid_level,
     encode_heading,
     encode_heading_control,
     encode_iso_request,
     encode_position,
     encode_rate_of_turn,
     encode_rpm,
+    encode_rudder,
     encode_sats,
+    encode_speed_water,
+    encode_transmission,
+    encode_wind,
     decode_fields,
 )
 from otlab.can import unpack_id
@@ -131,6 +141,8 @@ DEVICE_CATALOG = [
     (16, "nav", "GNSS-1", True),
     (17, "nav", "GNSS-2", True),
     (35, "nav", "gyro", True),
+    (40, "nav", "echo", True),
+    (48, "nav", "wind", True),
     (24, "nav", "AIS", False),
     (56, "nav", "autopilot", False),
     (52, "nav", "rudder", False),
@@ -138,8 +150,17 @@ DEVICE_CATALOG = [
     (99, "nav", "decoy", False),
     (0, "propulsion", "engine-port", True),
     (1, "propulsion", "engine-stbd", True),
+    (4, "propulsion", "gear-port", True),
+    (5, "propulsion", "gear-stbd", True),
+    (8, "propulsion", "fuel", True),
     (12, "propulsion", "thruster", False),
     (20, "power", "genset-1", False),
+    (21, "power", "genset-2", False),
+    (28, "power", "battery", True),
+    (32, "power", "switchbank", False),
+    (80, "aux", "environment", True),
+    (84, "aux", "tanks", True),
+    (88, "aux", "bilge-fire", True),
 ]
 
 
@@ -416,8 +437,11 @@ class DeviceTwins:
         heading = self.injector.spoof_heading(plant)
         rot = self.injector.spoof_rot(plant)
         if self._on(35):
+            pitch = 0.4
+            roll = rot * 0.35
             self._emit(frames, encode_heading(plant.t, "nav", 35, heading))
             self._emit(frames, encode_rate_of_turn(plant.t, "nav", 35, rot))
+            self._emit(frames, encode_attitude(plant.t, "nav", 35, heading, pitch, roll))
             if self.injector.attacks.get("gyro"):
                 self.injector.record_label(
                     plant,
@@ -440,8 +464,11 @@ class DeviceTwins:
                 )
         rpm_port = self.injector.spoof_rpm(plant, "port")
         rpm_stbd = self.injector.spoof_rpm(plant, "stbd")
+        load = 55.0 if plant.sog_kn > 1 else 12.0
+        oil_kpa = 420.0
         if self._on(0):
             self._emit(frames, encode_rpm(plant.t, "propulsion", 0, rpm_port))
+            self._emit(frames, encode_engine_dynamic(plant.t, "propulsion", 0, plant.oil_temp_c, oil_kpa, load))
             if self.injector.attacks.get("rpm"):
                 self.injector.record_label(
                     plant,
@@ -455,10 +482,37 @@ class DeviceTwins:
                 )
         if self._on(1):
             self._emit(frames, encode_rpm(plant.t, "propulsion", 1, rpm_stbd))
+            self._emit(frames, encode_engine_dynamic(plant.t, "propulsion", 1, plant.oil_temp_c, oil_kpa, load))
+        gear = 1 if plant.sog_kn > 1 else 0
+        if self._on(4):
+            self._emit(frames, encode_transmission(plant.t, "propulsion", 4, gear))
+        if self._on(5):
+            self._emit(frames, encode_transmission(plant.t, "propulsion", 5, gear))
+        if self._on(8):
+            self._emit(frames, encode_fluid_level(plant.t, "propulsion", 8, 68.0, instance=0))
+        echo_on = self._on(40) or self.injector.attacks.get("depth")
+        if echo_on:
+            depth = self.injector.spoof_depth(plant)
+            stw = max(0.0, plant.sog_kn * 0.96)
+            self._emit(frames, encode_depth(plant.t, "nav", 40, depth))
+            self._emit(frames, encode_speed_water(plant.t, "nav", 40, stw))
+            if self.injector.attacks.get("depth"):
+                self.injector.record_label(
+                    plant,
+                    128267,
+                    40,
+                    technique="T1692.002",
+                    attack_id="depth-spoof",
+                    scenario_id="underway",
+                    copies=n,
+                )
+        if self._on(48):
+            self._emit(frames, encode_wind(plant.t, "nav", 48, 12.0, 40.0))
         ais_on = self._on(24) or self.injector.attacks.get("ais")
         if ais_on:
             alat, alon = self.injector.spoof_ais(plant)
             self._emit(frames, encode_ais_position(plant.t, "nav", 24, alat, alon))
+            self._emit(frames, encode_ais_static(plant.t, "nav", 24, "OPV-LAB1"))
             if self.injector.attacks.get("ais"):
                 self.injector.record_label(
                     plant,
@@ -470,35 +524,39 @@ class DeviceTwins:
                     copies=n,
                 )
         if self._on(56):
-            self._emit(frames, encode_heading(plant.t, "nav", 56, plant.heading_deg))
+            self._emit(frames, encode_heading_control(plant.t, "nav", 56, plant.heading_deg, status=True))
         if self._on(52):
-            self._emit(frames, encode_heading(plant.t, "nav", 52, plant.heading_deg))
+            angle = max(-35.0, min(35.0, rot * 2.5))
+            self._emit(frames, encode_rudder(plant.t, "nav", 52, angle))
         if self._on(12):
             self._emit(frames, encode_rpm(plant.t, "propulsion", 12, 900.0))
-        if self._on(20) or self.injector.attacks.get("battery"):
-            self._emit(frames, encode_battery(plant.t, "power", 20, self.injector.spoof_battery()))
+        if self._on(20):
+            self._emit(frames, encode_rpm(plant.t, "power", 20, 1800.0))
+        if self._on(21):
+            self._emit(frames, encode_rpm(plant.t, "power", 21, 1800.0))
+        batt_on = self._on(28) or self.injector.attacks.get("battery")
+        if batt_on:
+            self._emit(frames, encode_battery(plant.t, "power", 28, self.injector.spoof_battery()))
             if self.injector.attacks.get("battery"):
                 self.injector.record_label(
                     plant,
                     127508,
-                    20,
+                    28,
                     technique="T1692.002",
                     attack_id="battery-spoof",
                     scenario_id="underway",
                     segment="power",
                     copies=n,
                 )
-        if self.injector.attacks.get("depth"):
-            self._emit(frames, encode_depth(plant.t, "nav", 16 if self._on(16) else ROGUE_SA, self.injector.spoof_depth(plant)))
-            self.injector.record_label(
-                plant,
-                128267,
-                16 if self._on(16) else ROGUE_SA,
-                technique="T1692.002",
-                attack_id="depth-spoof",
-                scenario_id="underway",
-                copies=n,
-            )
+        if self._on(32):
+            bits = 0x01 if plant.breaker_closed else 0x00
+            self._emit(frames, encode_binary_status(plant.t, "power", 32, bits))
+        if self._on(80):
+            self._emit(frames, encode_environment(plant.t, "aux", 80, 16.0, 78.0))
+        if self._on(84):
+            self._emit(frames, encode_fluid_level(plant.t, "aux", 84, 41.0, instance=1))
+        if self._on(88):
+            self._emit(frames, encode_binary_status(plant.t, "aux", 88, 0))
 
         attacks = self.injector.attacks
         if attacks.get("pgn_flood") and self._on(35):

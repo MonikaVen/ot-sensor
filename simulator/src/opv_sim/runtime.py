@@ -24,31 +24,52 @@ PGN_NAME = {
     60928: "ISO address claim",
     126208: "Engine/thruster command",
     127237: "Heading/track control",
+    127245: "Rudder",
     127250: "Vessel heading",
     127251: "Rate of turn",
+    127257: "Attitude",
     127488: "Engine rapid",
+    127489: "Engine dynamic params",
+    127493: "Transmission parameters",
+    127501: "Binary status",
+    127505: "Fluid level",
     127508: "Battery status",
+    128259: "Speed, water referenced",
     128267: "Water depth",
     129025: "Position rapid",
     129026: "COG/SOG",
     129029: "GNSS position data",
     129038: "AIS position",
     129539: "GNSS DOPs",
+    129794: "AIS class A static/voyage",
+    130306: "Wind data",
+    130311: "Environmental parameters",
 }
 
 SA_NAME = {
     "0": "engine-port",
     "1": "engine-stbd",
+    "4": "gear-port",
+    "5": "gear-stbd",
+    "8": "fuel",
     "12": "thruster",
     "16": "GNSS-1",
     "17": "GNSS-2",
     "20": "genset-1",
+    "21": "genset-2",
     "24": "AIS",
+    "28": "battery",
+    "32": "switchbank",
     "35": "gyro",
+    "40": "echo",
     "44": "rogue",
+    "48": "wind",
     "52": "rudder",
     "56": "autopilot",
     "60": "MFD",
+    "80": "environment",
+    "84": "tanks",
+    "88": "bilge-fire",
     "99": "decoy",
 }
 
@@ -75,10 +96,40 @@ def _summary(fields: dict) -> str:
         return f"sats {fields['sat_count']}"
     if fields.get("operation_name") == "heading_control":
         return f"heading cmd {fields.get('heading_deg', 0):.1f}°"
+    if fields.get("operation_name") == "heading_control_status":
+        return f"heading-control status {fields.get('heading_deg', 0):.1f}° (engaged)"
     if fields.get("operation_name") == "engine_control":
         return f"engine cmd {fields.get('rpm', 0):.0f} rpm → SA {fields.get('engine_da', 0)}"
     if fields.get("operation_name") == "rate_of_turn":
         return f"ROT {fields.get('rot_deg_s', 0):.1f}°/s"
+    if fields.get("operation_name") == "attitude":
+        return (
+            f"yaw {fields.get('yaw_deg', 0):.1f}° "
+            f"pitch {fields.get('pitch_deg', 0):.1f}° "
+            f"roll {fields.get('roll_deg', 0):.1f}°"
+        )
+    if fields.get("operation_name") == "rudder":
+        return f"rudder {fields.get('rudder_deg', 0):.1f}°"
+    if fields.get("operation_name") == "engine_dynamic":
+        return (
+            f"oil {fields.get('oil_kpa', 0):.0f} kPa "
+            f"{fields.get('oil_temp_c', 0):.0f} °C  "
+            f"load {fields.get('load_pct', 0):.0f}%"
+        )
+    if fields.get("operation_name") == "ais_static":
+        return f"AIS static {fields.get('ship_name', '')}"
+    if fields.get("operation_name") == "speed_water":
+        return f"STW {fields.get('stw_kn', 0):.1f} kn"
+    if fields.get("operation_name") == "wind":
+        return f"wind {fields.get('wind_kn', 0):.1f} kn @ {fields.get('wind_deg', 0):.0f}°"
+    if fields.get("operation_name") == "transmission":
+        return f"gear {fields.get('gear', 0)}"
+    if fields.get("operation_name") == "fluid_level":
+        return f"fluid {fields.get('fluid_pct', 0):.0f}%"
+    if fields.get("operation_name") == "binary_status":
+        return f"binary {int(fields.get('bits', 0))}"
+    if fields.get("operation_name") == "environment":
+        return f"{fields.get('temp_c', 0):.1f} °C  {fields.get('humidity_pct', 0):.0f}% RH"
     if fields.get("operation_name") == "water_depth":
         return f"depth {fields.get('depth_m', 0):.1f} m"
     if fields.get("operation_name") == "battery_status":
@@ -158,7 +209,7 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
         kind = "engine"
         technique = "T1692.001"
         burst = True
-    elif pgn == 127237:
+    elif pgn == 127237 and (fields.get("privileged") or sa == "44"):
         kind = "write"
         technique = "T0814" if on.get("write_flood") else "T1692.001"
         burst = bool(on.get("write_flood"))

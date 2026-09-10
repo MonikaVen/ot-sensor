@@ -169,7 +169,7 @@ def test_asset_autodetect_unknown_and_claim():
     assert rogue.name == "heading sensor"
     assert rogue.criticality == 2
     assert any(c["change"] == "new_asset" and c["asset_id"] == "44" for c in det.changes)
-    claimed = det.observe(ad.convert(encode_claim(t, "nav", 88, "ROGUE")))
+    claimed = det.observe(ad.convert(encode_claim(t, "nav", 77, "ROGUE")))
     assert claimed.expected is False
     assert claimed.identity["iso_name"] == "ROGUE"
     assert claimed.name == "ROGUE"
@@ -227,6 +227,16 @@ def test_lab_rule_packs_iso_request_and_unexpected_talker():
     by = {h.rule_id: h for h in RulesEnrich().evaluate(win)}
     assert by["n2k-heading-control"].fired
     assert by["unexpected-talker"].fired
+
+    status_win = FeatureStage().window(
+        [ad.convert(encode_heading_control(t, "nav", 56, 90, status=True))]
+    )
+    status_ev = ad.convert(encode_heading_control(t, "nav", 56, 90, status=True))
+    assert status_ev.is_write is False
+    assert status_ev.privileged is False
+    assert status_win.features["heading_control_count"] == 0
+    by = {h.rule_id: h for h in RulesEnrich().evaluate(status_win)}
+    assert by["n2k-heading-control"].fired is False
 
     flood = FeatureStage().window([ad.convert(encode_heading(t, "nav", 35, 90)) for _ in range(20)])
     by = {h.rule_id: h for h in RulesEnrich().evaluate(flood)}

@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from opv_sim.runtime import SimRuntime
+from opv_sim.twins import DEVICE_CATALOG
 from otlab.pgn import decode_fields
 
 
@@ -114,6 +115,15 @@ def test_sim_control_api_sets_attack():
         assert 'id="devices"' in r.text
         assert "#log li.attack" in r.text
         assert "#log li.read" in r.text
+        assert 'data-sa="40"' in r.text
+        assert 'data-sa="48"' in r.text
+        assert 'data-sa="28"' in r.text
+        assert 'data-sa="88"' in r.text
+        assert "127257" in r.text
+        assert "127245" in r.text
+        assert "127489" in r.text
+        assert "129794" in r.text
+        assert "127237 status" in r.text
 
 
 def test_attack_emissions_share_red_kind():
@@ -308,3 +318,42 @@ def test_frequency_control_api():
         r = client.post("/api/control", json={"action": "toggle_attack", "attack": "rogue_master", "enabled": True})
         assert r.json()["snapshot"]["attacks"]["rogue_master"] is True
         assert r.json()["snapshot"]["attack_id"] == "rogue-master"
+
+
+def test_catalog_twins_publish_missing_pgns():
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    rt.set_device("24", True)
+    rt.set_device("52", True)
+    rt.set_device("56", True)
+    _plant, frames = rt.tick()
+    decoded = [decode_fields(f) for f in frames]
+    pgns_by_sa: dict[int, set[int]] = {}
+    for row in decoded:
+        pgns_by_sa.setdefault(row["sa"], set()).add(row["pgn"])
+    assert 127257 in pgns_by_sa[35]
+    assert 129794 in pgns_by_sa[24]
+    assert 127489 in pgns_by_sa[0] and 127489 in pgns_by_sa[1]
+    assert 127245 in pgns_by_sa[52]
+    assert 127250 not in pgns_by_sa.get(52, set())
+    assert 128267 in pgns_by_sa[40] and 128259 in pgns_by_sa[40]
+    assert 130306 in pgns_by_sa[48]
+    assert 127493 in pgns_by_sa[4] and 127493 in pgns_by_sa[5]
+    assert 127505 in pgns_by_sa[8] and 127505 in pgns_by_sa[84]
+    assert 127508 in pgns_by_sa[28]
+    assert 130311 in pgns_by_sa[80]
+    assert 127501 in pgns_by_sa[88]
+    status = next(r for r in decoded if r["sa"] == 56 and r["pgn"] == 127237)
+    assert status["operation_name"] == "heading_control_status"
+    assert status.get("privileged") is False
+    snap = rt.snapshot()
+    ap = next(e for e in snap["emissions"] if e["sa"] == "56" and e["pgn"] == 127237)
+    assert ap["kind"] == "ok"
+    assert "status" in ap["summary"]
+    rud = next(e for e in snap["emissions"] if e["sa"] == "52" and e["pgn"] == 127245)
+    assert rud["kind"] == "ok"
+    assert "rudder" in rud["summary"]
+    catalog_sas = {str(sa) for sa, *_rest in DEVICE_CATALOG}
+    for sa in ("40", "48", "4", "5", "8", "21", "28", "32", "80", "84", "88"):
+        assert sa in catalog_sas
+        assert sa in rt.devices

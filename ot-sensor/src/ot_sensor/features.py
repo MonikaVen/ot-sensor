@@ -10,7 +10,33 @@ from otlab import OTEvent
 from otlab.geo import haversine_m
 
 # Vessel model SAs from asset-criticality.yaml. Anything else is unexpected.
-EXPECTED_SAS = frozenset({"0", "1", "12", "16", "17", "20", "24", "35", "52", "56", "60", "99"})
+EXPECTED_SAS = frozenset(
+    {
+        "0",
+        "1",
+        "4",
+        "5",
+        "8",
+        "12",
+        "16",
+        "17",
+        "20",
+        "21",
+        "24",
+        "28",
+        "32",
+        "35",
+        "40",
+        "48",
+        "52",
+        "56",
+        "60",
+        "80",
+        "84",
+        "88",
+        "99",
+    }
+)
 RECENT_S = 5.0
 
 
@@ -69,7 +95,11 @@ class FeatureStage:
         if len(recent) > 1:
             dt_r = max(0.2, (recent[-1].timestamp - recent[0].timestamp).total_seconds())
         iso_n = sum(1 for e in recent if e.object_address == "59904")
-        ctrl_n = sum(1 for e in recent if e.object_address == "127237")
+        ctrl_n = sum(
+            1
+            for e in recent
+            if e.object_address == "127237" and (e.is_write or e.privileged)
+        )
         hdg_n = sum(1 for e in recent if e.object_address == "127250")
         unexpected = {e.source_asset_id for e in recent if e.source_asset_id and e.source_asset_id not in EXPECTED_SAS}
         feat = {
