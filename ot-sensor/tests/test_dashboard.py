@@ -48,6 +48,15 @@ def test_runtime_inventory_and_incident(tmp_path):
     by = {a["asset_id"]: a["traffic"] for a in rt.snapshot()["assets"]}
     assert by["44"] == "attack"
     assert by["16"] == "attack"
+    hist = {h["key"]: h for h in snap["histograms"]}
+    assert "spoof" in hist and "gyro" in hist and "pgn_flood" in hist
+    assert hist["spoof"]["attack"]
+    rt.sim.set_attack("read", False)
+    rt.sim.set_attack("gyro", True)
+    rt.step()
+    flow = rt.snapshot()["message_flow"]
+    assert any((m.get("kind") == "gyro" or m.get("spoofed")) and m["sa"] == "35" for m in flow)
+    assert any(m.get("kind") == "read" for m in flow)
 
 
 def test_api_health_and_step(tmp_path):

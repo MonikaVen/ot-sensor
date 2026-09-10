@@ -77,6 +77,7 @@ class TapMirror:
         self.last_frames: list[CanFrame] = []
         self.last_raw: list[dict] = []
         self.attacks: dict = {}
+        self.histograms: list = []
 
     def apply(self, payload: dict) -> None:
         self.ticks = int(payload.get("ticks") or 0)
@@ -87,6 +88,7 @@ class TapMirror:
         self.last_raw = [frame_to_wire(row) for row in payload.get("frames") or []]
         self.last_frames = [wire_to_frame(row) for row in self.last_raw]
         self.attacks = dict(payload.get("attacks") or {})
+        self.histograms = list(payload.get("histograms") or [])
 
     def tick(self):
         return self.plant, self.last_frames
@@ -100,3 +102,4 @@ class TapMirror:
         self.last_raw = []
         self.attack_id = ""
         self.attacks = {}
+        self.histograms = []

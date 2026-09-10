@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from opv_sim.runtime import SimRuntime
-from opv_sim.twins import DEVICE_CATALOG
+from opv_sim.twins import ATTACK_CATALOG, DEVICE_CATALOG
 from otlab.pgn import decode_fields
 
 
@@ -116,7 +116,11 @@ def test_sim_control_api_sets_attack():
         assert 'id="attacks"' in r.text
         assert 'id="devices"' in r.text
         assert "#log li.attack" in r.text
-        assert "#log li.read" in r.text
+        assert "#log li.spoofed" in r.text
+        assert 'data-rail="plots"' in r.text
+        assert 'id="plots-grid"' in r.text
+        assert "#3caf7a" in r.text
+        assert "#d45b4c" in r.text
         assert 'data-sa="40"' in r.text
         assert 'data-sa="48"' in r.text
         assert 'data-sa="28"' in r.text
@@ -126,6 +130,41 @@ def test_sim_control_api_sets_attack():
         assert "127489" in r.text
         assert "129794" in r.text
         assert "127237 status" in r.text
+
+
+def test_histograms_benign_and_attack_per_overlay():
+    rt = SimRuntime("dev", "")
+    rt.set_attack("spoof", False)
+    for _ in range(4):
+        rt.tick()
+    rows = {h["key"]: h for h in rt.histogram_payload()}
+    assert set(rows) == {k for k, *_ in ATTACK_CATALOG}
+    assert rows["spoof"]["benign"]
+    assert rows["spoof"]["unit"] == "lat °"
+    assert not rows["spoof"]["attack"]
+    assert rows["spoof"]["active"] is False
+    lat_benign = rows["spoof"]["benign"][-1]
+    heading_benign = rows["gyro"]["benign"][-1]
+    flood_benign = rows["pgn_flood"]["benign"][-1]
+    rt.set_attack("spoof", True)
+    rt.tick()
+    rows = {h["key"]: h for h in rt.histogram_payload()}
+    assert rows["spoof"]["attack"]
+    assert rows["spoof"]["active"] is True
+    assert abs(rows["spoof"]["attack"][-1] - lat_benign) > 1e-4
+    rt.set_attack("spoof", False)
+    rt.set_attack("gyro", True)
+    rt.tick()
+    rows = {h["key"]: h for h in rt.histogram_payload()}
+    assert rows["gyro"]["attack"]
+    assert abs(rows["gyro"]["attack"][-1] - heading_benign) > 5
+    rt.set_attack("gyro", False)
+    rt.set_attack("pgn_flood", True)
+    rt.set_device("35", True)
+    rt.tick()
+    rows = {h["key"]: h for h in rt.histogram_payload()}
+    assert rows["pgn_flood"]["attack"][-1] > flood_benign
+    assert rows["pgn_flood"]["unit"] == "frames/tick"
 
 
 def test_attack_emissions_share_red_kind():
@@ -220,6 +259,11 @@ def test_tap_endpoint_exposes_raw_frames():
         row = body["frames"][0]
         assert "can_id" in row and "data_hex" in row and "segment" in row
         assert bytes.fromhex(row["data_hex"])
+        assert body["histograms"]
+        keys = {h["key"] for h in body["histograms"]}
+        assert keys == {k for k, *_ in ATTACK_CATALOG}
+        spoof = next(h for h in body["histograms"] if h["key"] == "spoof")
+        assert spoof["attack"]
 
 
 def test_frequency_scales_flood_and_attack_log():

@@ -136,6 +136,18 @@ export type FlowMessage = {
   summary: string;
   hex: string;
   spoofed: boolean;
+  kind?: string;
+  technique?: string | null;
+};
+
+export type HistogramRow = {
+  key: string;
+  label: string;
+  technique: string;
+  unit: string;
+  benign: number[];
+  attack: number[];
+  active: boolean;
 };
 
 export type Snapshot = {
@@ -185,6 +197,7 @@ export type Snapshot = {
   stix_path: string | null;
   attack_started_at?: string | null;
   message_flow?: FlowMessage[];
+  histograms?: HistogramRow[];
   flow_asset?: { asset_id: string; name: string };
   rules?: {
     packs: RulePack[];

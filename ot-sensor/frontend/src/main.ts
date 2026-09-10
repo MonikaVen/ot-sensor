@@ -1,11 +1,11 @@
 import { ack, askAssistant, control, fetchAssistant, fetchSnapshot, updateRule } from "./api";
 import { assetMapSvg } from "./map";
-import { linePlot, plotColors } from "./plot";
-import type { Alert, Asset, AssistantSession, FlowMessage, HoneypotFeed, Incident, ModelPack, RuleClause, RulePack, Snapshot } from "./types";
+import { histogramPlot, linePlot, plotColors } from "./plot";
+import type { Alert, Asset, AssistantSession, FlowMessage, HistogramRow, HoneypotFeed, Incident, ModelPack, RuleClause, RulePack, Snapshot } from "./types";
 import "./styles.css";
 
 type Overlay = "comms" | "deps";
-type Page = "map" | "rules" | "models" | "correlation" | "honeypot" | "assistant";
+type Page = "map" | "rules" | "models" | "plots" | "correlation" | "honeypot" | "assistant";
 
 const SUGGESTED = [
   "Why did this incident fire?",
@@ -331,6 +331,32 @@ function modelsPageHtml(snap: Snapshot): string {
   </div>`;
 }
 
+function plotsPageHtml(snap: Snapshot): string {
+  const rows: HistogramRow[] = snap.histograms ?? [];
+  const body =
+    rows.length === 0
+      ? `<p class="muted">Start the injector and toggle overlays. Each plot bins benign vs attack samples for that overlay.</p>`
+      : `<div class="plots-grid">${rows
+          .map((h) => {
+            const nB = h.benign?.length ?? 0;
+            const nA = h.attack?.length ?? 0;
+            return `<article class="hist-card ${h.active ? "detect" : ""}">
+              <h3>${esc(h.label)}</h3>
+              <p class="muted">${esc(h.technique || "")} · ${esc(h.unit || "")} · benign n=${nB} · attack n=${nA}</p>
+              ${histogramPlot(h.benign || [], h.attack || [])}
+              <p class="plot-legend"><span><i class="swatch" style="background:#3caf7a"></i>benign</span><span><i class="swatch" style="background:#d45b4c"></i>attack</span></p>
+            </article>`;
+          })
+          .join("")}</div>`;
+  return `<div class="models-page">
+    <div class="map-toolbar models-toolbar">
+      <h2>Attack plots</h2>
+      <p class="muted">One histogram per overlay. Attack series uses the GNSS spoof red.</p>
+    </div>
+    ${body}
+  </div>`;
+}
+
 function scoreLine(scores: Record<string, number> | undefined): string {
   if (!scores) return "—";
   const keys = ["flood_score", "actual_fps", "threshold_fps", "predicted_fps", "residual_fps"];
@@ -652,14 +678,16 @@ function flowHtml(snap: Snapshot): string {
     msgs.length === 0
       ? `<li class="muted">Waiting for TAP frames from ${esc(asset.name)}.</li>`
       : msgs
-          .map(
-            (m) => `<li class="${m.spoofed ? "spoofed" : ""}">
-              <div class="meta">${esc(fmtClock(m.t))} · ${esc(m.segment)} · SA ${esc(m.sa)} ${esc(m.name)}${m.spoofed ? " · SPOOF" : ""}</div>
+          .map((m) => {
+            const hot = !!(m.spoofed || (m.kind && m.kind !== "ok"));
+            const tag = hot ? ` · ${esc((m.technique || m.kind || "attack").toUpperCase())}` : "";
+            return `<li class="${hot ? "attack" : ""}">
+              <div class="meta">${esc(fmtClock(m.t))} · ${esc(m.segment)} · SA ${esc(m.sa)} ${esc(m.name)}${tag}</div>
               <div><strong>PGN ${esc(String(m.pgn))}</strong> ${esc(m.pgn_name)}</div>
               <div>${esc(m.summary)}</div>
               <div class="hex">${esc(m.hex)}</div>
-            </li>`,
-          )
+            </li>`;
+          })
           .join("");
   const selected = snap.assets.find((a) => a.asset_id === state.selectedAsset) ?? null;
   return `<aside class="side">
@@ -709,6 +737,7 @@ function render(): void {
           <button type="button" class="btn ${state.page === "map" ? "active" : ""}" data-page="map">Map</button>
           <button type="button" class="btn ${state.page === "rules" ? "active" : ""}" data-page="rules">Rules</button>
           <button type="button" class="btn ${state.page === "models" ? "active" : ""}" data-page="models">Models</button>
+          <button type="button" class="btn ${state.page === "plots" ? "active" : ""}" data-page="plots">Plots</button>
           <button type="button" class="btn ${state.page === "correlation" ? "active" : ""}" data-page="correlation">Correlation</button>
           <button type="button" class="btn ${state.page === "honeypot" ? "active" : ""}" data-page="honeypot">Honeypot</button>
           <button type="button" class="btn ${state.page === "assistant" ? "active" : ""}" data-page="assistant">Assistant</button>
@@ -719,7 +748,7 @@ function render(): void {
     ${snap ? healthHtml(snap) : ""}
     ${snap?.tap_error ? `<p class="banner">Simulator TAP ${esc(snap.tap_url || "")}: ${esc(snap.tap_error)}</p>` : ""}
     ${state.error ? `<p class="banner">${esc(state.error)} — start with ot-dashboard on :8443</p>` : ""}
-    <div class="main ${state.page === "rules" ? "rules-page" : ""} ${state.page === "models" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant" ? "models-page-main" : ""}">
+    <div class="main ${state.page === "rules" ? "rules-page" : ""} ${state.page === "models" || state.page === "plots" || state.page === "correlation" || state.page === "honeypot" || state.page === "assistant" ? "models-page-main" : ""}">
       ${
         state.page === "rules"
           ? snap
@@ -728,6 +757,10 @@ function render(): void {
           : state.page === "models"
             ? snap
               ? modelsPageHtml(snap)
+              : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
+          : state.page === "plots"
+            ? snap
+              ? plotsPageHtml(snap)
               : `<div class="map-col"><p class="muted">Waiting for TAP snapshot…</p></div>`
           : state.page === "correlation"
             ? snap

@@ -86,3 +86,56 @@ export function linePlot(
 export function plotColors(i: number): string {
   return COLORS[i % COLORS.length];
 }
+
+export function histogramPlot(benign: number[], attack: number[], opts?: { width?: number; height?: number }): string {
+  const w = opts?.width ?? 420;
+  const h = opts?.height ?? 96;
+  const padL = 28;
+  const padR = 8;
+  const padT = 8;
+  const padB = 18;
+  const nBins = 10;
+  const vals = [...benign, ...attack];
+  if (!vals.length) {
+    return `<svg class="rt-plot hist-plot" viewBox="0 0 ${w} ${h}" role="img"><text x="${w / 2}" y="${h / 2}" text-anchor="middle" fill="#8b97a8" font-size="11">waiting for samples</text></svg>`;
+  }
+  let lo = Math.min(...vals);
+  let hi = Math.max(...vals);
+  if (hi - lo < 1e-9) {
+    lo -= 1;
+    hi += 1;
+  }
+  const span = hi - lo;
+  const binsB = Array(nBins).fill(0);
+  const binsA = Array(nBins).fill(0);
+  const place = (arr: number[], bins: number[]) => {
+    for (const v of arr) {
+      const i = Math.min(nBins - 1, Math.floor(((v - lo) / span) * nBins));
+      bins[i]++;
+    }
+  };
+  place(benign, binsB);
+  place(attack, binsA);
+  const peak = Math.max(1, ...binsB, ...binsA);
+  const innerW = w - padL - padR;
+  const innerH = h - padT - padB;
+  const slot = innerW / nBins;
+  const barW = Math.max(2, (slot - 2) / 2);
+  const yAt = (c: number) => padT + innerH - (c / peak) * innerH;
+  const bars: string[] = [];
+  for (let i = 0; i < nBins; i++) {
+    const x = padL + i * slot;
+    const hb = Math.max(0, innerH - (yAt(binsB[i]) - padT));
+    const ha = Math.max(0, innerH - (yAt(binsA[i]) - padT));
+    bars.push(`<rect x="${x.toFixed(1)}" y="${yAt(binsB[i]).toFixed(1)}" width="${barW}" height="${hb.toFixed(1)}" fill="#3caf7a"/>`);
+    bars.push(`<rect x="${(x + barW + 1).toFixed(1)}" y="${yAt(binsA[i]).toFixed(1)}" width="${barW}" height="${ha.toFixed(1)}" fill="#d45b4c"/>`);
+  }
+  const fmt = (v: number) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2));
+  return `<svg class="rt-plot hist-plot" viewBox="0 0 ${w} ${h}" role="img">
+    <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${h - padB}" stroke="#2a3340" />
+    <line x1="${padL}" y1="${h - padB}" x2="${w - padR}" y2="${h - padB}" stroke="#2a3340" />
+    ${bars.join("")}
+    <text x="${padL}" y="${h - 4}" fill="#8b97a8" font-size="9">${fmt(lo)}</text>
+    <text x="${w - padR}" y="${h - 4}" text-anchor="end" fill="#8b97a8" font-size="9">${fmt(hi)}</text>
+  </svg>`;
+}

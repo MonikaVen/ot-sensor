@@ -204,11 +204,12 @@ class LabRuntime:
         attacks = self._attacks()
         for fr in frames:
             row = emission_row(fr, plant, attacks)
-            if row["sa"] != SPOOF_SA:
+            is_attack = bool(row.get("spoofed") or row.get("kind") not in (None, "ok"))
+            if row["sa"] != SPOOF_SA and not is_attack:
                 continue
             row["t"] = _iso(fr.t)
             self.message_flow.append(row)
-            if row.get("spoofed") and self.attack_started_at is None:
+            if is_attack and self.attack_started_at is None:
                 self.attack_started_at = row["t"]
 
     def _record_monitor(self) -> None:
@@ -253,6 +254,12 @@ class LabRuntime:
             return
         drop = set(incident_ids)
         self.new_incident_ids = [i for i in self.new_incident_ids if i not in drop]
+
+    def _histograms(self) -> list:
+        fn = getattr(self.sim, "histogram_payload", None)
+        if callable(fn):
+            return fn()
+        return list(getattr(self.sim, "histograms", None) or [])
 
     def snapshot(self) -> dict:
         sensor = self.sensor
@@ -389,6 +396,7 @@ class LabRuntime:
             "attack_started_at": self.attack_started_at,
             "message_flow": list(reversed(self.message_flow)),
             "flow_asset": {"asset_id": SPOOF_SA, "name": "GNSS-1"},
+            "histograms": self._histograms(),
             "honeypot": honeypot,
             "assistant": self.assistant.status(),
         }
