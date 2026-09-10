@@ -750,7 +750,7 @@ function render(): void {
             <button type="button" class="btn ${state.overlay === "comms" ? "active" : ""}" data-overlay="comms">Communications</button>
             <button type="button" class="btn ${state.overlay === "deps" ? "active" : ""}" data-overlay="deps">Dependencies</button>
           </div>
-          <p class="legend"><span class="swatch fill ok"></span> benign <span class="swatch fill bad"></span> attack <span class="swatch fill idle"></span> silent <span class="swatch ok"></span> comms <span class="swatch bad"></span> violation <span class="swatch dep"></span> depends_on</p>
+          <p class="legend"><span class="swatch fill ok"></span> benign <span class="swatch fill bad"></span> attack <span class="swatch fill idle"></span> silent <span class="swatch ok"></span> comms <span class="swatch bad"></span> violation <span class="swatch dep"></span> depends_on · Hz on each comms line · issue name when red</p>
         </div>
         ${
           snap

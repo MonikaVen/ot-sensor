@@ -33,6 +33,8 @@ export type CommsEdge = {
   live?: boolean;
   kind: string;
   last_seen?: string;
+  frequency_hz?: number;
+  issue?: string | null;
 };
 
 export type DepEdge = {

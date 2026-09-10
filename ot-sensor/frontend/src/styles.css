@@ -198,6 +198,12 @@ h3 { margin: 0 0 6px; font-size: 12px; }
 .edge-bad { stroke: var(--bad); stroke-width: 2; }
 .edge-new { stroke: var(--warn); stroke-width: 1.5; }
 .edge-dep { stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.8; }
+.edge-hz, .edge-issue {
+  font-size: 9px; pointer-events: none;
+  paint-order: stroke; stroke: #0c1014; stroke-width: 3px; stroke-linejoin: round;
+}
+.edge-hz { fill: var(--text); font-variant-numeric: tabular-nums; }
+.edge-issue { fill: var(--bad); font-weight: 600; }
 .node rect { fill: #1a222c; stroke: var(--stroke); }
 .swatch.fill { width: 10px; height: 10px; border-radius: 1px; }
 .swatch.fill.ok { background: var(--ok); }

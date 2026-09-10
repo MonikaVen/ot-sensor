@@ -39,6 +39,25 @@ function trafficLabel(a: Asset): string {
   return "silent";
 }
 
+function mid(a: Pt, b: Pt): Pt {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function commsBad(e: CommsEdge): boolean {
+  return e.kind === "violation" || Boolean(e.issue);
+}
+
+function edgeCaption(p: Pt, e: CommsEdge): string {
+  const hz = Number.isFinite(Number(e.frequency_hz)) ? Math.round(Number(e.frequency_hz)) : 0;
+  const bad = commsBad(e);
+  const issue = bad && e.issue ? String(e.issue) : "";
+  const hzY = issue ? p.y + 8 : p.y + 3;
+  const issueText = issue
+    ? `<text x="${p.x}" y="${p.y - 6}" text-anchor="middle" class="edge-issue">${esc(issue)}</text>`
+    : "";
+  return `${issueText}<text x="${p.x}" y="${hzY}" text-anchor="middle" class="edge-hz">${hz} Hz</text>`;
+}
+
 export function assetMapSvg(
   assets: Asset[],
   comms: CommsEdge[],
@@ -66,6 +85,7 @@ export function assetMapSvg(
   }).join("");
 
   let edges = "";
+  let captions = "";
   if (overlay === "deps") {
     for (const e of dependencies) {
       const a = pos.get(e.src);
@@ -77,17 +97,21 @@ export function assetMapSvg(
     comms.forEach((e) => {
       const a = pos.get(e.src);
       if (!a) return;
+      const bad = commsBad(e);
       if (!e.dst) {
         const col = SEGMENTS.indexOf(e.segment as (typeof SEGMENTS)[number]);
         const bx = PAD_X + (col >= 0 ? col : 0) * COL_W + COL_W / 2;
-        const cls = e.kind === "violation" ? "edge-bad" : "edge-bus";
-        edges += `<line x1="${a.x}" y1="${a.y}" x2="${bx}" y2="36" class="${cls}" />`;
+        const b = { x: bx, y: 36 };
+        const cls = bad ? "edge-bad" : "edge-bus";
+        edges += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" class="${cls}" />`;
+        captions += edgeCaption({ x: (a.x + b.x) / 2, y: a.y - 26 }, e);
         return;
       }
       const b = pos.get(e.dst);
       if (!b) return;
-      const cls = e.kind === "violation" ? "edge-bad" : e.expected ? "edge-ok" : "edge-new";
+      const cls = bad ? "edge-bad" : e.expected ? "edge-ok" : "edge-new";
       edges += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" class="${cls}" />`;
+      captions += edgeCaption(mid(a, b), e);
     });
   }
 
@@ -105,5 +129,5 @@ export function assetMapSvg(
     })
     .join("");
 
-  return `<div class="map-wrap"><svg class="map-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="OPV asset map">${bands}${edges}${nodes}</svg></div>`;
+  return `<div class="map-wrap"><svg class="map-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="OPV asset map">${bands}${edges}${nodes}${captions}</svg></div>`;
 }

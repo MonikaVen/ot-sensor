@@ -23,6 +23,10 @@ def test_runtime_inventory_and_incident(tmp_path):
     assert (tmp_path / "assets" / "dev" / "opv1" / "inventory.json").exists()
     assert snap["stats"]["events"] > 0
     assert snap["comms"]
+    assert all("frequency_hz" in e for e in snap["comms"])
+    gnss = next(e for e in snap["comms"] if e["src"] == "16" and e["dst"] is None)
+    assert gnss["frequency_hz"] >= 1
+    assert gnss["issue"] == "GNSS-1 spoof"
     assert snap["incidents"]
     assert any(i["risk"]["nis2_significant"] for i in snap["incidents"])
     inc = next(i for i in snap["incidents"] if i["risk"]["nis2_significant"])
@@ -48,6 +52,9 @@ def test_runtime_inventory_and_incident(tmp_path):
     by = {a["asset_id"]: a["traffic"] for a in rt.snapshot()["assets"]}
     assert by["44"] == "attack"
     assert by["16"] == "attack"
+    read_edge = next(e for e in rt.snapshot()["comms"] if e["src"] == "44")
+    assert read_edge["issue"] == "Read"
+    assert read_edge["frequency_hz"] >= 1
     hist = {h["key"]: h for h in snap["histograms"]}
     assert "spoof" in hist and "gyro" in hist and "pgn_flood" in hist
     assert hist["spoof"]["attack"]
@@ -63,6 +70,12 @@ def test_runtime_inventory_and_incident(tmp_path):
     assert any(m["sa"] == "60" for m in later)
     assert any(m["sa"] == "99" for m in later)
     rt.sim.set_attack("read", False)
+    rt.sim.set_attack("gateway_bypass", True)
+    rt.step()
+    bypass = [e for e in rt.snapshot()["comms"] if e["src"] == "0" and e.get("issue") == "Gateway bypass"]
+    assert bypass and bypass[0]["frequency_hz"] >= 1
+    assert bypass[0]["kind"] == "violation"
+    rt.sim.set_attack("gateway_bypass", False)
     rt.sim.set_attack("gyro", True)
     rt.step()
     flow = rt.snapshot()["message_flow"]

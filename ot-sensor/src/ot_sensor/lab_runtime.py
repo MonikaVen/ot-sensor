@@ -35,12 +35,47 @@ FLOW_MAX = 100
 LOG_MAX = 3000
 MONITOR_MAX = 90
 HP_HIST_MAX = 90
+CHANGE_ISSUE = {
+    "gateway_bypass": "Gateway bypass",
+    "new_edge": "Unexpected talker",
+}
 
 
 def _iso(v):
     if isinstance(v, datetime):
         return v.isoformat()
     return v
+
+
+def _edge_key(src, dst, seg) -> tuple:
+    dest = None if dst in (None, "", "255", 255) else str(dst)
+    return (str(src or ""), dest, str(seg or ""))
+
+
+def _row_issue(row: dict) -> str | None:
+    if not (row.get("spoofed") or row.get("kind") not in (None, "ok")):
+        return None
+    label = str(row.get("attack_label") or "").strip()
+    if label and label != "benign":
+        return label
+    kind = str(row.get("kind") or "").strip()
+    return kind if kind and kind != "ok" else "attack"
+
+
+def _comms_tick_stats(frames, plant, attacks: dict | None) -> dict[tuple, dict]:
+    out: dict[tuple, dict] = {}
+    for fr in frames or []:
+        fields = decode_fields(fr)
+        src = str(fields.get("sa") or "")
+        if not src:
+            continue
+        key = _edge_key(src, fields.get("da"), getattr(fr, "segment", "") or "")
+        slot = out.setdefault(key, {"hits": 0, "issue": None})
+        slot["hits"] += 1
+        issue = _row_issue(emission_row(fr, plant, attacks))
+        if issue:
+            slot["issue"] = issue
+    return out
 
 
 class LabRuntime:
@@ -77,6 +112,7 @@ class LabRuntime:
         self.attack_started_at: str | None = None
         self.traffic_talkers: set[str] = set()
         self.traffic_attacked: set[str] = set()
+        self.edge_tick: dict[tuple, dict] = {}
         self._ingested_ticks = -1
         self._log_seq = 0
         self.assistant = CyberPalAssistant(self.repo, self.work)
@@ -109,6 +145,7 @@ class LabRuntime:
         self.attack_started_at = None
         self.traffic_talkers.clear()
         self.traffic_attacked.clear()
+        self.edge_tick = {}
         self._ingested_ticks = -1
         self._log_seq = 0
         self.assistant.clear()
@@ -156,6 +193,7 @@ class LabRuntime:
                     self.new_incident_ids.append(case.incident_id)
         self._record_flow(frames, plant)
         self._classify_traffic(frames, plant)
+        self.edge_tick = _comms_tick_stats(frames, plant, self._attacks())
         self.ticks += 1
         return self.snapshot()
 
@@ -305,7 +343,16 @@ class LabRuntime:
             )
 
         live_edges = []
+        src_issue = {
+            str(c.get("src")): CHANGE_ISSUE[c["change"]]
+            for c in sensor.graph.changes
+            if c.get("change") in CHANGE_ISSUE and c.get("src") is not None
+        }
         for edge in sensor.graph.edges.values():
+            st = self.edge_tick.get(_edge_key(edge.src, edge.dst, edge.segment), {})
+            issue = st.get("issue")
+            if not issue and not edge.expected:
+                issue = src_issue.get(str(edge.src), "Unexpected talker")
             live_edges.append(
                 {
                     "src": edge.src,
@@ -315,6 +362,8 @@ class LabRuntime:
                     "live": True,
                     "kind": "violation" if not edge.expected else ("broadcast" if edge.dst is None else "unicast"),
                     "last_seen": _iso(edge.last_seen),
+                    "frequency_hz": int(st.get("hits") or 0),
+                    "issue": issue,
                 }
             )
         dep_edges = []
