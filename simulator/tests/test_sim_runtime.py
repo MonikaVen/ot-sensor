@@ -123,9 +123,15 @@ def test_sim_control_api_sets_attack():
         assert "#log li.attack" in r.text
         assert "#log li.spoofed" in r.text
         assert "#d45b4c" in r.text
-        assert 'data-rail="plots"' in r.text
-        assert 'id="plots-grid"' in r.text
+        assert 'data-rail="plots"' not in r.text
+        assert 'id="page-plots"' in r.text
+        assert 'id="page-injector"' in r.text
+        assert 'id="plot-attack"' in r.text
+        assert 'id="plot-device"' in r.text
         assert "All attacks" in r.text
+        assert "All devices" in r.text
+        assert 'id="export-plots"' in r.text
+        assert 'id="export-logs"' in r.text
         assert 'id="hz-rand"' in r.text
         assert "GNSS-1 spoof" in r.text
         assert 'data-sa="40"' in r.text
@@ -154,6 +160,10 @@ def test_histograms_benign_and_attack_per_overlay():
     heading_benign = hist_v(rows["gyro"]["benign"][-1])
     flood_benign = hist_v(rows["pgn_flood"]["benign"][-1])
     assert rows["spoof"]["benign"][-1]["t"]
+    assert rows["spoof"]["benign"][-1].get("sa") == "16"
+    archive = rt.snapshot()["log_archive"]
+    assert archive
+    assert any(row["sa"] == "16" for row in archive)
     rt.set_attack("spoof", True)
     rt.tick()
     rows = {h["key"]: h for h in rt.histogram_payload()}

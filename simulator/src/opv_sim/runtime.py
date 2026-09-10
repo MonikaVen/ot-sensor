@@ -84,6 +84,8 @@ SA_NAME = {
 
 TRACK_MAX = 180
 HIST_MAX = 240
+LOG_MAX = 3000
+LOG_SNAP = 800
 COUNT_ATTACKS = {
     "read",
     "write",
@@ -127,79 +129,81 @@ def _num(fields: dict, key: str) -> float | None:
         return None
 
 
-def attack_samples(key: str, decoded: list[dict]) -> list[float]:
-    """Numeric samples for one overlay this tick (payload value or a count)."""
-    vals: list[float] = []
+def attack_samples(key: str, decoded: list[dict]) -> list[tuple[float, str]]:
+    """Numeric samples for one overlay this tick (payload value or a count), with talker SA."""
+    pairs: list[tuple[float, str]] = []
     for d in decoded:
         pgn = d.get("pgn")
         sa = d.get("sa")
         seg = d.get("segment")
+        talker = "" if sa is None else str(sa)
         if key == "spoof":
             if sa == 16 and pgn == 129025:
                 v = _num(d, "lat_deg")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "spoof_both":
             if sa in (16, 17) and pgn == 129025:
                 v = _num(d, "lat_deg")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "ais":
             if pgn == 129038:
                 v = _num(d, "lat_deg")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "gyro":
             if sa == 35 and pgn == 127250:
                 v = _num(d, "heading_deg")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "rot":
             if pgn == 127251:
                 v = _num(d, "rot_deg_s")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "velocity":
             if sa == 16 and pgn == 129026:
                 v = _num(d, "sog_kn")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "rpm":
             if sa in (0, 1) and pgn == 127488 and seg == "propulsion":
                 v = _num(d, "rpm")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "depth":
             if pgn == 128267:
                 v = _num(d, "depth_m")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key == "battery":
             if pgn == 127508:
                 v = _num(d, "volts")
                 if v is not None:
-                    vals.append(v)
+                    pairs.append((v, talker))
         elif key in ("read", "read_flood") and pgn == 59904:
-            vals.append(1.0)
+            pairs.append((1.0, talker))
         elif key in ("write", "write_flood") and pgn == 127237 and (d.get("privileged") or sa == 44):
-            vals.append(1.0)
+            pairs.append((1.0, talker))
         elif key == "engine_cmd" and pgn == 126208:
-            vals.append(1.0)
+            pairs.append((1.0, talker))
         elif key == "pgn_flood" and sa == 35 and pgn == 127250:
-            vals.append(1.0)
+            pairs.append((1.0, talker))
         elif key == "error_flood" and d.get("error"):
-            vals.append(1.0)
+            pairs.append((1.0, talker))
         elif key == "fast_packet" and sa == 44 and pgn == 129029:
-            vals.append(1.0)
+            pairs.append((1.0, talker))
         elif key == "rogue_master" and pgn == 60928 and (
             sa == 44 or str(d.get("iso_name") or "").startswith("ROGUE")
         ):
-            vals.append(1.0)
+            pairs.append((1.0, talker))
         elif key == "gateway_bypass" and pgn == 127488 and seg == "nav":
-            vals.append(1.0)
+            pairs.append((1.0, talker))
     if key in COUNT_ATTACKS:
-        return [float(len(vals))]
-    return vals
+        n = float(len(pairs))
+        return [(n, sa) for _v, sa in pairs]
+    return pairs
 
 
 def empty_hist() -> dict[str, dict[str, deque]]:
@@ -213,7 +217,10 @@ def _hist_series(items) -> list[dict]:
     out = []
     for item in items:
         if isinstance(item, dict):
-            out.append({"t": item.get("t"), "v": round(float(item["v"]), 5)})
+            row = {"t": item.get("t"), "v": round(float(item["v"]), 5)}
+            if item.get("sa") not in (None, ""):
+                row["sa"] = str(item["sa"])
+            out.append(row)
         else:
             out.append({"v": round(float(item), 5)})
     return out
@@ -390,6 +397,7 @@ def emission_row(frame, plant, attacks: dict | None = None, frequency: int = FRE
         "hz": frequency,
         "burst": burst,
         "error": bool(frame.error),
+        "t": _iso(getattr(frame, "t", None)),
     }
 
 
@@ -417,6 +425,7 @@ class SimRuntime:
         self.plant = None
         self.last_frames = []
         self.track: deque[dict] = deque(maxlen=TRACK_MAX)
+        self.log_archive: deque[dict] = deque(maxlen=LOG_MAX)
         self.attacks = attacks_for(self.attack_id)
         self.devices = default_devices()
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
@@ -456,6 +465,7 @@ class SimRuntime:
         self.plant = None
         self.last_frames = []
         self.track.clear()
+        self.log_archive.clear()
         self.attacks = attacks_for(self.attack_id)
         self.devices = default_devices()
         gnss = self.attacks.get("spoof") or self.attacks.get("spoof_both")
@@ -532,7 +542,7 @@ class SimRuntime:
             if not samples:
                 continue
             side = "attack" if self.attacks.get(key) else "benign"
-            self.hist[key][side].extend({"t": ts, "v": float(v)} for v in samples)
+            self.hist[key][side].extend({"t": ts, "v": float(v), "sa": str(sa)} for v, sa in samples)
 
     def histogram_payload(self) -> list[dict]:
         return [
@@ -556,6 +566,8 @@ class SimRuntime:
         self.plant = plant
         self.last_frames = frames
         self._record_hist(frames)
+        for f in frames:
+            self.log_archive.append(emission_row(f, plant, self.attacks, self.frequency))
         self.elapsed += 1.0
         self.ticks += 1
         if plant is not None:
@@ -631,6 +643,7 @@ class SimRuntime:
             "frames_this_tick": len(self.last_frames),
             "labels": len(self.sim.labels.records),
             "emissions": attack_log_rows(self.last_frames, plant, self.attacks, hz),
+            "log_archive": list(self.log_archive)[-LOG_SNAP:],
             "histograms": self.histogram_payload(),
             "plant": {
                 "t": _iso(plant.t) if plant else None,

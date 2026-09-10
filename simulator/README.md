@@ -66,7 +66,7 @@ Open http://127.0.0.1:8444
 
 Frequency (1–32 Hz) sizes flood bursts and repeats spoofed talker rows in the attack log. Check **Randomize** to pick a new Hz each tick; moving the slider turns randomize off and locks that rate. Each log line keeps the ATT&CK id (`T1692.002`, `T0848`, …).
 
-The right rail has **Messages** and **Plots**. Plots filter by named overlay (`GNSS-1 spoof`, `Gyro spoof`, …) plus **All attacks**.
+The right rail is the live message log. **Plots** is a header tab beside Start/Pause. Filter by named overlay (`GNSS-1 spoof`, …, **All attacks**) and by device (SA), then export plots or logs as CSV.
 
 Attach the sensor:
 

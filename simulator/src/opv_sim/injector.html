@@ -118,35 +118,52 @@
         display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
         padding: 12px 14px 8px; flex-shrink: 0;
       }
-      .rail-tabs { display: flex; gap: 6px; }
-      .rail-tabs button { padding: 4px 10px; font-size: 12px; }
-      #plots {
+      #plots-page {
         display: none; flex-direction: column; min-height: 0; flex: 1; overflow: auto;
-        padding: 0 12px 16px;
+        padding: 14px 20px 20px;
       }
-      .bus-log.plots-open #log { display: none; }
-      .bus-log.plots-open #plots { display: flex; }
-      .plot-filter {
-        display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px;
+      body.plots-open #plots-page { display: flex; }
+      body.plots-open .workspace { display: none; }
+      .plots-toolbar {
+        display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end;
+        margin: 0 0 14px; padding: 12px 14px;
+        border: 1px solid var(--stroke); background: var(--panel);
+      }
+      .plots-toolbar label {
+        display: flex; flex-direction: column; gap: 4px;
         font-size: 11px; color: var(--muted);
       }
-      .plot-filter select {
+      .plots-toolbar select {
         background: var(--bg); color: var(--text); border: 1px solid var(--stroke);
-        padding: 6px 8px; font: inherit; font-size: 12px;
+        padding: 6px 8px; font: inherit; font-size: 13px; min-width: 180px;
       }
-      #plots-grid { display: flex; flex-direction: column; gap: 10px; }
+      .plots-toolbar .hint { color: var(--muted); font-size: 12px; margin: 0 0 2px; }
+      #plots-grid {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 12px; align-items: start;
+      }
       .plot-card {
-        border: 1px solid var(--stroke); background: var(--bg); padding: 8px 10px 10px;
+        border: 1px solid var(--stroke); background: var(--panel); padding: 10px 12px 12px;
       }
       .plot-card.detect { border-color: var(--bad); }
       .plot-card h3 {
-        margin: 0 0 2px; font-size: 12px; font-weight: 600; letter-spacing: 0;
+        margin: 0 0 2px; font-size: 13px; font-weight: 600; letter-spacing: 0;
         text-transform: none; color: var(--text);
       }
-      .plot-card .meta { color: var(--muted); font-size: 10px; margin: 0 0 6px; }
-      .plot-card svg { width: 100%; height: 88px; display: block; }
+      .plot-card .meta { color: var(--muted); font-size: 11px; margin: 0 0 8px; }
+      .plot-card svg { width: 100%; height: 96px; display: block; }
       .plot-legend { display: flex; gap: 10px; margin: 6px 0 0; font-size: 10px; color: var(--muted); }
       .plot-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: middle; }
+      .plots-log { margin-top: 18px; }
+      .plots-log h2 { margin: 0 0 8px; }
+      .plots-table-wrap { overflow: auto; max-height: min(42vh, 480px); border: 1px solid var(--stroke); }
+      .plots-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      .plots-table th, .plots-table td {
+        text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--stroke); vertical-align: top;
+      }
+      .plots-table th { color: var(--muted); font-weight: 600; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
+      .plots-table tr.attack td { background: #2a1514; }
+      .plots-table .hex { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--muted); }
       #log { list-style: none; margin: 0; padding: 8px 0 16px; overflow: auto; flex: 1; }
       #log li {
         padding: 8px 14px; border-bottom: 1px solid var(--stroke); font-size: 12px;
@@ -228,8 +245,40 @@
       </dl>
       <div class="controls">
         <button type="button" class="primary" id="run">Start</button>
+        <button type="button" id="page-injector" class="active">Injector</button>
+        <button type="button" id="page-plots">Plots</button>
       </div>
     </header>
+    <section id="plots-page" aria-label="Plots">
+      <div class="plots-toolbar">
+        <p class="hint">Filter histograms and the log by named overlay and talker, then export CSV.</p>
+        <label for="plot-attack">Attack
+          <select id="plot-attack">
+            <option value="all">All attacks</option>
+          </select>
+        </label>
+        <label for="plot-device">Device
+          <select id="plot-device">
+            <option value="all">All devices</option>
+          </select>
+        </label>
+        <button type="button" id="export-plots">Export plots CSV</button>
+        <button type="button" id="export-logs">Export logs CSV</button>
+      </div>
+      <div id="plots-grid"></div>
+      <section class="plots-log">
+        <h2>Filtered frames</h2>
+        <p class="hint" id="plots-log-count"></p>
+        <div class="plots-table-wrap">
+          <table class="plots-table">
+            <thead>
+              <tr><th>Time</th><th>Kind</th><th>Talker</th><th>PGN</th><th>Name</th><th>Technique</th><th>Summary</th><th>Hex</th></tr>
+            </thead>
+            <tbody id="plots-log-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
     <div class="workspace">
       <div class="main-col">
       <div class="backbone">
@@ -344,27 +393,24 @@
       <aside class="bus-log">
         <div class="rail-head">
           <h2 id="rail-title">Emitted messages</h2>
-          <div class="rail-tabs">
-            <button type="button" class="active" data-rail="messages">Messages</button>
-            <button type="button" data-rail="plots">Plots</button>
-          </div>
         </div>
         <ol id="log"></ol>
-        <div id="plots">
-          <div class="plot-filter">
-            <label for="plot-attack">Attack</label>
-            <select id="plot-attack">
-              <option value="all">All attacks</option>
-            </select>
-          </div>
-          <div id="plots-grid"></div>
-        </div>
       </aside>
     </div>
     <script>
       const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
       let lastTicks = -1;
       let playId = 0;
+      let lastSnap = null;
+      const PLOT_LOG_MAX = 250;
+      const ATTACK_KINDS = {
+        spoof: ["spoof"], spoof_both: ["spoof"], ais: ["ais"], gyro: ["gyro"], rot: ["rot"],
+        velocity: ["velocity"], rpm: ["rpm"], depth: ["depth"], battery: ["battery"],
+        read: ["read"], write: ["write"], engine_cmd: ["engine"],
+        read_flood: ["flood", "read"], write_flood: ["flood", "write"], pgn_flood: ["flood"],
+        error_flood: ["error", "flood"], fast_packet: ["flood"], rogue_master: ["rogue"],
+        gateway_bypass: ["bypass"],
+      };
 
       function fmtLat(v) {
         if (v == null || Number.isNaN(v)) return "—";
@@ -529,17 +575,76 @@
         ).join("");
         box.dataset.ready = "1";
       }
-      function ensurePlotSelect(s) {
-        const sel = document.getElementById("plot-attack");
-        if (!sel || sel.dataset.ready) return;
-        const catalog = s.attack_catalog || [];
-        sel.innerHTML = `<option value="all">All attacks</option>` + catalog.map((d) =>
-          `<option value="${esc(d.key)}">${esc(d.label)}</option>`
-        ).join("");
-        sel.dataset.ready = "1";
+      function ensurePlotFilters(s) {
+        const attackSel = document.getElementById("plot-attack");
+        if (attackSel && !attackSel.dataset.ready) {
+          const catalog = s.attack_catalog || [];
+          attackSel.innerHTML = `<option value="all">All attacks</option>` + catalog.map((d) =>
+            `<option value="${esc(d.key)}">${esc(d.label)}</option>`
+          ).join("");
+          attackSel.dataset.ready = "1";
+        }
+        const deviceSel = document.getElementById("plot-device");
+        if (deviceSel && !deviceSel.dataset.ready) {
+          const catalog = s.device_catalog || [];
+          const extra = catalog.some((d) => String(d.sa) === "44") ? [] : [{ sa: "44", name: "rogue" }];
+          deviceSel.innerHTML = `<option value="all">All devices</option>` + [...catalog, ...extra].map((d) =>
+            `<option value="${esc(d.sa)}">SA ${esc(d.sa)} ${esc(d.name)}</option>`
+          ).join("");
+          deviceSel.dataset.ready = "1";
+        }
       }
-      function nums(series) {
-        return (series || []).map((x) => (typeof x === "number" ? x : Number(x && x.v))).filter(Number.isFinite);
+      function plotFilter() {
+        const attack = document.getElementById("plot-attack");
+        const device = document.getElementById("plot-device");
+        return { attack: attack ? attack.value : "all", device: device ? device.value : "all" };
+      }
+      function nums(series, device) {
+        return (series || [])
+          .filter((x) => {
+            if (device === "all") return true;
+            const sa = x && typeof x === "object" ? String(x.sa || "") : "";
+            return !sa || sa === device;
+          })
+          .map((x) => (typeof x === "number" ? x : Number(x && x.v)))
+          .filter(Number.isFinite);
+      }
+      function csvEscape(v) {
+        const s = v == null ? "" : String(v);
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      }
+      function toCsv(headers, rows) {
+        return [headers.map(csvEscape).join(",")].concat(rows.map((r) => r.map(csvEscape).join(","))).join("\r\n") + "\r\n";
+      }
+      function downloadCsv(name, csv) {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      function stamp(prefix) {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, "0");
+        return `${prefix}-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
+      }
+      function filteredHist(s) {
+        const { attack, device } = plotFilter();
+        return (s.histograms || [])
+          .filter((h) => attack === "all" || h.key === attack)
+          .map((h) => ({ ...h, benign: nums(h.benign, device), attack: nums(h.attack, device) }))
+          .filter((h) => device === "all" || attack !== "all" || h.benign.length || h.attack.length);
+      }
+      function logMatches(row, attack, device) {
+        if (device !== "all" && String(row.sa) !== device) return false;
+        if (attack === "all") return true;
+        const kinds = ATTACK_KINDS[attack];
+        if (!kinds) return true;
+        return kinds.includes(row.kind);
+      }
+      function filteredLogs(s) {
+        const { attack, device } = plotFilter();
+        return (s.log_archive || []).filter((row) => logMatches(row, attack, device));
       }
       function histSvg(benign, attack) {
         const w = 320, h = 88, padL = 28, padR = 8, padT = 8, padB = 16, nBins = 10;
@@ -580,27 +685,84 @@
           <text x="${w - padR}" y="${h - 3}" text-anchor="end" fill="#8b97a8" font-size="9">${fmt(hi)}</text>
         </svg>`;
       }
-      function renderPlots(s) {
-        ensurePlotSelect(s);
-        const grid = document.getElementById("plots-grid");
-        const sel = document.getElementById("plot-attack");
-        if (!grid) return;
-        const key = sel ? sel.value : "all";
-        const rows = (s.histograms || []).filter((h) => key === "all" || h.key === key);
-        if (!rows.length) {
-          grid.innerHTML = `<p class="meta">No plot for that attack yet. Start the plant and toggle an overlay.</p>`;
+      function renderPlotLogs(s) {
+        const body = document.getElementById("plots-log-body");
+        const count = document.getElementById("plots-log-count");
+        if (!body) return;
+        const rows = filteredLogs(s);
+        const shown = rows.slice(-PLOT_LOG_MAX).reverse();
+        if (count) {
+          count.textContent = rows.length
+            ? `${shown.length === rows.length ? rows.length : `latest ${shown.length} of ${rows.length}`} matching frame${rows.length === 1 ? "" : "s"}`
+            : "No frames for this attack and device filter.";
+        }
+        if (!shown.length) {
+          body.innerHTML = `<tr><td colspan="8" class="hex">No frames for this filter. Start the plant or widen Attack / Device.</td></tr>`;
           return;
         }
-        grid.innerHTML = rows.map((h) => {
-          const benign = nums(h.benign);
-          const attack = nums(h.attack);
-          return `<article class="plot-card ${h.active ? "detect" : ""}">
-            <h3>${esc(h.label)}</h3>
-            <p class="meta">${esc(h.technique || "")} · ${esc(h.unit || "")} · benign n=${benign.length} · attack n=${attack.length}${h.active ? " · live" : ""}</p>
-            ${histSvg(benign, attack)}
-            <p class="plot-legend"><span><i style="background:#3caf7a"></i>benign</span><span><i style="background:#d45b4c"></i>attack</span></p>
-          </article>`;
+        body.innerHTML = shown.map((m) => {
+          const attack = (m.kind && m.kind !== "ok") || m.spoofed;
+          return `<tr class="${attack ? "attack" : ""}">
+            <td>${esc((m.t || "").replace("T", " ").slice(0, 19))}</td>
+            <td>${esc(m.kind || "ok")}</td>
+            <td>SA ${esc(m.sa)} ${esc(m.name || "")}</td>
+            <td>PGN ${esc(m.pgn)}</td>
+            <td>${esc(m.pgn_name || "")}</td>
+            <td>${esc(m.technique || "")}</td>
+            <td>${esc(m.summary || "")}</td>
+            <td class="hex">${esc(m.hex || "")}</td>
+          </tr>`;
         }).join("");
+      }
+      function renderPlots(s) {
+        ensurePlotFilters(s);
+        const grid = document.getElementById("plots-grid");
+        if (!grid) return;
+        const rows = filteredHist(s);
+        if (!rows.length) {
+          grid.innerHTML = `<p class="meta">No plot for that attack yet. Start the plant and toggle an overlay.</p>`;
+        } else {
+          grid.innerHTML = rows.map((h) => {
+            return `<article class="plot-card ${h.active ? "detect" : ""}">
+              <h3>${esc(h.label)}</h3>
+              <p class="meta">${esc(h.technique || "")} · ${esc(h.unit || "")} · benign n=${h.benign.length} · attack n=${h.attack.length}${h.active ? " · live" : ""}</p>
+              ${histSvg(h.benign, h.attack)}
+              <p class="plot-legend"><span><i style="background:#3caf7a"></i>benign</span><span><i style="background:#d45b4c"></i>attack</span></p>
+            </article>`;
+          }).join("");
+        }
+        renderPlotLogs(s);
+      }
+      function plotsCsv(s) {
+        const { attack, device } = plotFilter();
+        const rows = [];
+        for (const h of s.histograms || []) {
+          if (attack !== "all" && h.key !== attack) continue;
+          for (const side of ["benign", "attack"]) {
+            for (const item of h[side] || []) {
+              const sa = item && typeof item === "object" ? String(item.sa || "") : "";
+              if (device !== "all" && sa && sa !== device) continue;
+              const v = typeof item === "number" ? item : Number(item && item.v);
+              if (!Number.isFinite(v)) continue;
+              rows.push([h.label, h.key, side, item && item.t || "", v, h.unit || "", h.technique || "", sa]);
+            }
+          }
+        }
+        return toCsv(["overlay", "key", "source", "t", "value", "unit", "technique", "sa"], rows);
+      }
+      function logsCsv(s) {
+        const rows = filteredLogs(s).map((m) => [
+          m.t || "", m.kind || "ok", m.sa, m.name || "", m.pgn, m.pgn_name || "",
+          m.segment || "", m.technique || "", m.spoofed ? "true" : "false", m.summary || "", m.hex || "",
+        ]);
+        return toCsv(["t", "kind", "sa", "name", "pgn", "pgn_name", "segment", "technique", "spoofed", "summary", "hex"], rows);
+      }
+      function setPage(page) {
+        const plots = page === "plots";
+        document.body.classList.toggle("plots-open", plots);
+        document.getElementById("page-plots").classList.toggle("active", plots);
+        document.getElementById("page-injector").classList.toggle("active", !plots);
+        if (plots && lastSnap) renderPlots(lastSnap);
       }
       function syncToggles(s) {
         const attacks = s.attacks || {};
@@ -732,10 +894,12 @@
         });
       }
       function apply(s) {
+        lastSnap = s;
         renderStats(s);
         renderMotion(s);
         playEmissions(s);
-        renderPlots(s);
+        if (document.body.classList.contains("plots-open")) renderPlots(s);
+        else ensurePlotFilters(s);
       }
       document.getElementById("run").onclick = async () => {
         const s = await snap();
@@ -755,17 +919,18 @@
       document.getElementById("hz-rand").addEventListener("change", async (ev) => {
         apply(await control("frequency_random", { enabled: ev.target.checked }));
       });
-      document.querySelector(".bus-log").addEventListener("click", (ev) => {
-        const t = ev.target.closest("[data-rail]");
-        if (!t) return;
-        const rail = t.getAttribute("data-rail");
-        document.querySelectorAll("[data-rail]").forEach((b) => b.classList.toggle("active", b === t));
-        document.querySelector(".bus-log").classList.toggle("plots-open", rail === "plots");
-        document.getElementById("rail-title").textContent = rail === "plots" ? "Attack plots" : "Emitted messages";
-      });
-      document.getElementById("plot-attack").addEventListener("change", async () => {
-        try { renderPlots(await snap()); } catch (e) { /* keep last grid */ }
-      });
+      document.getElementById("page-plots").onclick = () => setPage("plots");
+      document.getElementById("page-injector").onclick = () => setPage("injector");
+      document.getElementById("plot-attack").addEventListener("change", () => { if (lastSnap) renderPlots(lastSnap); });
+      document.getElementById("plot-device").addEventListener("change", () => { if (lastSnap) renderPlots(lastSnap); });
+      document.getElementById("export-plots").onclick = () => {
+        if (!lastSnap) return;
+        downloadCsv(stamp("opv-sim-plots"), plotsCsv(lastSnap));
+      };
+      document.getElementById("export-logs").onclick = () => {
+        if (!lastSnap) return;
+        downloadCsv(stamp("opv-sim-logs"), logsCsv(lastSnap));
+      };
       document.getElementById("sog").addEventListener("input", (ev) => {
         document.getElementById("sog-out").value = Number(ev.target.value).toFixed(1);
       });
